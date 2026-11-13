@@ -8,14 +8,14 @@
 - `risk_*_dash_*.csv`：类别 / 大类 / 总体 / 趋势统计（参考）
 - `bscat_monitor_*.html`：监控报告 → 定范围（数据在 `const DATA = {…}`，JSON 解析；类别级指标在 `DATA.categories[]`）
 - 字段映射：`finv_*` = bscat，`illion_*` = illion，`(空)` = 无分类；明细与监控可能不同期，数字不要混用。
-- `AUS_BS_CAT_Model` 仓库：**开始分析前先与用户确认本次使用哪个路径**（可能存在多个副本 / 分支）；确认后所有规则 / 代码 / catalog 核对均基于该路径，并写入清单头部。未确认不得开始分析。
+- `AUS_BS_CAT_Model` 仓库：**开始分析前先与用户确认本次使用哪个路径**（可能存在多个副本 / 分支）；确认后所有规则 / 代码 / catalog 核对均基于该路径。未确认不得开始分析。
 
 ## 1. 定范围（按规则机械执行，不自行扩展）
 
 **P0 全集（10 类，全部进入范围）**：
 `Wages、Centrelink、All Other Credits、SACC Loans、Non SACC Loans、Unknown Loans、Credit Card Repayments、Debt Collection、Debt Consolidation、Overdrawn`
 
-「全量」指所有 P0 行进入候选，不做抽样；判定粒度按 2.1 的流向覆盖规则，未覆盖流向在附录单列，不静默丢弃。
+「全量」指所有 P0 行进入候选，不做抽样；判定粒度按 2.1 的流向覆盖规则。
 
 **非 P0 筛选（固定规则）**：取 `DATA.categories[]` 中 `level != "P0"` 的类别，三组各取前 5、合并去重（≤15 类）：
 1. `coverage_gap` 最负的 5 类
@@ -26,7 +26,7 @@
 
 **判定范围**：明细中 `差异流向` 任一端属于「P0 ∪ 入选类别」的行。
 
-**剔噪**：先剔除 `amount` 为空或数值为 0 的行（银行通知类），记录剔除行数；这些行不进入判定。
+**剔噪**：先剔除 `amount` 为空或数值为 0 的行（银行通知类）；这些行不进入判定。
 
 ## 2. 判定（按流向覆盖，机械执行）
 
@@ -50,9 +50,8 @@
    - 分类不一致（双方都有分类）→ 判谁对
    - 仅 illion 有分类（bscat 空）→ illion对 ⇒ bscat 漏识别；illion错 ⇒ 不改
    - 仅 bscat 有分类（illion 空）→ bscat对 ⇒ 不改；bscat错 ⇒ 误报，需收紧
-5. **原始文本留存**：每聚类留存 1 条原始 `text`（截断 80 字符）；不要只留归一化文本。
 
-## 3. 出清单（只列需要改的项）
+## 3. 出清单
 
 **位置由类别决定（固定映射，不猜）**：
 
@@ -73,16 +72,14 @@
 | 其余消费类（Dining Out / Retail / Groceries 等） | `initial_engine/merchant_kb.csv`、`catch_all_engine/resources/catch_all_rules.csv` | `initial_engine/domain/classification.py`、`catch_all_engine/engine.py` |
 | 引擎顺序 / 覆盖关系 | `configs/pipeline.json` | `classification_core/orchestrator.py` |
 
-> 规则文件命中 ≠ 最终 `bscat`。如果 `add_bscat`、后续引擎或 orchestrator 会重算 / 覆盖，修改位置必须写到最终写入点，并在 `现状` 中说明覆盖链路。
-
 ### 3.1 施工前核对（每项必做，缺一不可）
 
 1. **定位到行 / 函数**：写出 `file` + `rule_name` / `merchant_name` / 函数名，并把当前值抄进 `现状`。行号可写，但以 `rule_name` / `merchant_name` 为准（行号会漂移）。
 2. **样本回放**：从该聚类取 1–3 条原始 `text`，按对应引擎的匹配方式验证拟改 pattern 是否命中（regex 用 `re.search`；keyword 按引擎实现，可能是子串 / 整词 / 最长关键词优先）。不命中就重写 pattern，不得直接写进清单。
 3. **CSV 结构核对**：不同引擎表头不同，先读表头，按实际列写。常见列：`match_type`（keyword / regex）、`priority` / `confidence`、`dr_cr`、`zero_amount_reject`、`unclassified_only`。`merchant_kb.csv` 每个 merchant 只取前 `_MAX_VARIANTS_PER_MERCHANT = 50` 个 variant（`initial_engine/domain/classification.py`），新增 / 保留关键词必须落在前 50。
-4. **追最终写入点**：规则命中后，继续追到 `add_bscat` / orchestrator / 后续引擎的最终写入点。若后续会重算，位置写最终函数，不写规则文件。
+4. **追最终写入点**：规则文件命中 ≠ 最终 `bscat`。继续追到 `add_bscat` / orchestrator / 后续引擎的最终写入点；若后续会重算 / 覆盖，位置写最终函数、不写规则文件，并在 `现状` 中说明覆盖链路。
 5. **事实核对**：`merchant_name`、当前 category、目标 category 必须 grep 得到；不得写「同时存在」「等」而不列全。规则是否存在也必须 grep 确认，不得凭印象写「已含」。
-6. **状态判定**：若正确结果依赖 `bank_accounts` 归属、stream 判定、引擎顺序等当前输入没有的状态，判定为 `需引擎状态`，写入第二部分并写清 `前置`；不要硬写成规则改动。
+6. **状态判定**：若正确结果依赖 `bank_accounts` 归属、stream 判定、引擎顺序等当前输入没有的状态，判定为 `需引擎状态`；不要硬写成规则改动。
 
 ### 3.2 改动类型与写法
 
@@ -94,7 +91,7 @@
 | 引擎逻辑 | `domain/*.py` / `orchestrator.py` | 函数名、入口条件、需要的输入字段、期望行为 |
 | 高危 | `configs/*.json` / 引擎顺序 | 影响的引擎和类别、回退风险 |
 
-`改为` 必须是完整替换行 / 精确 pattern / 函数行为，不得写成「复核 / 确认 / 收紧 / 建议 / 视情况 / 等」动作描述。
+`改为` 不得写成「复核 / 确认 / 收紧 / 建议 / 视情况 / 等」动作描述。
 
 ### 3.3 每项格式
 
@@ -115,11 +112,8 @@
 2. 再补账户归属 / 流判定能力（transfer / rent / SACC）。
 3. 最后加 / 删关键词和正则。
 
-理由：前置能力没修时，先加规则会把新命中继续送进错误的覆盖链路，回归结果不可解释。
-
 ### 3.5 漏项检查
 
-- Top 20 流向必须至少在四段清单中出现一次；行数 ≥ 判定范围 1% 的 flow 未出现 → 补写。
 - 每个 P0 类别至少出现一次（含「不改」）。
 
 ### 3.6 清单结构
@@ -127,18 +121,11 @@
 清单头部固定写：`AUS_BS_CAT_Model` 路径、detail 日期范围、monitor `dataDate`、范围类别数 / 行数、已判定流向覆盖行数及其占比、剔除零金额行数、未覆盖行数。
 
 1. `## 一、可执行改动`（按目标文件分组；按 3.4 顺序排列）
-2. `## 二、需复现 / 需引擎状态`（P0 优先，写明需要的状态 / 数据 / 前置）
+2. `## 二、需引擎状态`（P0 优先，写明需要的状态 / 数据 / 前置）
 3. `## 三、未覆盖`（Top-90% 以外的流向 / 聚类，记录行数）
 4. `## 四、判定为 bscat对 / 都对 / 信息不足`（不改，简述原因）
 
-**判定 → 去向（固定映射）**：
-
-| 判定 | 去向 |
-|---|---|
-| `illion对` / `都错` 且能给出正确类别 | 一、可执行改动 |
-| `都错` 且无法给出正确类别 / `需引擎状态` | 二、需复现 / 需引擎状态 |
-| 90% 覆盖之外的流向 / 聚类 | 三、未覆盖 |
-| `bscat对` / `都对` / `信息不足` | 四、不改 |
+`都错` 按能否给出正确类别拆分：能 → 一；不能 → 二。
 
 ## 约束
 
