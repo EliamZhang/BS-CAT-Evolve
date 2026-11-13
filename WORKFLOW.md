@@ -3,18 +3,18 @@
 **产出**：一份改动 To-do list，写到本仓库 `output/change_list.md`（可带日期）。归因、实施与回归都在 `AUS_BS_CAT_Model` 侧完成；本仓库只做对比分析与出清单。
 **原则**：修 bscat 的错分规则，不是让 bscat 对齐 illion（illion 自身也有错分）。
 
-**输入**（`input/`）
-- `risk_000008_dash_detail.csv`：逐笔差异明细（785 万行，2026-10-08）→ 逐笔判定
-- `risk_000008_dash_*.csv`：类别 / 大类 / 总体 / 趋势统计
-- `bscat_monitor_*.html`：最新监控（2026-11-12）→ 优先级与筛选
-- 明细与监控不同期，数字不要混用。
+**输入**（`input/`，每天可能有新快照，以最新文件为准）
+- `risk_*_dash_detail.csv`：逐笔差异明细 → 逐笔判定
+- `risk_*_dash_*.csv`：类别 / 大类 / 总体 / 趋势统计
+- `bscat_monitor_*.html`：监控报告（含类别级 P0/P1/P2、覆盖率 / 一致率 / 差异率、告警）→ 优先级与筛选
+- 明细与监控可能不同期（看 `sample_datetime` / `dataDate`），数字不要混用。
 - 字段映射：`finv_*` = bscat 输出，`illion_*` = illion 输出，`(空)` = 无分类。
 
 ## 1. 定范围
 
-- **P0（收入类+贷款类 10 类）**：全量看（明细 184.5 万行）。全量 = 按模式聚类，每个模式都有结论，不放心的边缘行单独看，不是逐笔人看。
-- **P1（Rent、Gambling）**：优先看（仅 2 类）。
-- **P2（其余 24 类）**：按 monitor 类别指标筛选——覆盖率差（finv 低于 illion）、`diff_rate` / `miss` / `extra` / 差异金额、`iou_rate`；按 `diff_count` 降序累计约 80% 取头部类别，叠加近期恶化趋势。
+- **P0（收入类+贷款类全体，以 monitor 的 `level` 为准）**：全量看。全量 = 按模式聚类，每个模式都有结论，不放心的边缘行单独看，不是逐笔人看。
+- **P1（Rent、Gambling）**：优先看。
+- **P2（其余类别）**：按 monitor 类别指标筛选——覆盖率差（finv 低于 illion）、`diff_rate` / `miss` / `extra` / 差异金额、`iou_rate`；按 `diff_count` 降序累计约 80% 取头部类别，叠加近期恶化趋势。
 - 优先级以 monitor 的 LEVEL_BY_SEGMENT 为准，勿与 dash「建议优先级 P1/P2/P3」混用。
 
 ## 2. 判定
