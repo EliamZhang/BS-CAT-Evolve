@@ -15,7 +15,7 @@
 **P0 全集（10 类，全部进入范围）**：
 `Wages、Centrelink、All Other Credits、SACC Loans、Non SACC Loans、Unknown Loans、Credit Card Repayments、Debt Collection、Debt Consolidation、Overdrawn`
 
-「全量」指所有 P0 行进入候选，不做抽样；判定粒度按 2.1 的流向覆盖规则（全局 90% + P0 逐类兜底）。
+「全量」指所有 P0 行进入候选，不做抽样。
 
 **非 P0 筛选（固定规则）**：取 `DATA.categories[]` 中 `level != "P0"` 的类别，三组各取前 5、合并去重（≤15 类）：
 1. `coverage_gap` 最负的 5 类
@@ -76,11 +76,10 @@
 ### 3.1 施工前核对（每项必做，缺一不可）
 
 1. **定位到行 / 函数**：写出 `file` + `rule_name` / `merchant_name` / 函数名，并把当前值抄进 `现状`。行号可写，但以 `rule_name` / `merchant_name` 为准（行号会漂移）。
-2. **样本回放**：从该聚类取 1–3 条原始 `text`，按对应引擎的匹配方式验证拟改 pattern 是否命中（regex 用 `re.search`；keyword 按引擎实现，可能是子串 / 整词 / 最长关键词优先）。不命中就重写 pattern，不得直接写进清单。
+2. **样本回放**：从该聚类取 1–3 条原始 `text`，按对应引擎的匹配方式验证拟改 pattern 是否命中（regex 用 `re.search`；keyword 按引擎实现，可能是子串 / 整词 / 最长关键词优先）。不命中就重写 pattern，不得直接写进清单。只在本仓库用 `re.search` / 字符串匹配验证，不执行 `AUS_BS_CAT_Model` 代码。
 3. **CSV 结构核对**：不同引擎表头不同，先读表头，按实际列写。常见列：`match_type`（keyword / regex）、`priority` / `confidence`、`dr_cr`、`zero_amount_reject`、`unclassified_only`。`merchant_kb.csv` 每个 merchant 只取前 `_MAX_VARIANTS_PER_MERCHANT = 50` 个 variant（`initial_engine/domain/classification.py`），新增 / 保留关键词必须落在前 50。
-4. **追最终写入点**：规则文件命中 ≠ 最终 `bscat`。继续追到 `add_bscat` / orchestrator / 后续引擎的最终写入点；若后续会重算 / 覆盖，位置写最终函数、不写规则文件，并在 `现状` 中说明覆盖链路。
-5. **事实核对**：`merchant_name`、当前 category、目标 category 必须 grep 得到；不得写「同时存在」「等」而不列全。规则是否存在也必须 grep 确认，不得凭印象写「已含」。
-6. **状态判定**：若正确结果依赖 `bank_accounts` 归属、stream 判定、引擎顺序等当前输入没有的状态，判定为 `需引擎状态`；不要硬写成规则改动。
+4. **追最终写入点**：规则文件命中 ≠ 最终 `bscat`；若后续会重算 / 覆盖，位置写最终函数、不写规则文件，并在 `现状` 中说明覆盖链路。
+5. **事实核对**：`merchant_name` / category / 规则是否已存在均须 grep 确认，不得凭印象；不得写「同时存在」「等」而不列全。
 
 ### 3.2 改动类型与写法
 
@@ -99,7 +98,7 @@
 ```md
 ### <file> / <rule_name|merchant_name|function>
 - [ ] 类型=`新增规则|删除泛词|命中链路|引擎逻辑|高危`
-  **问题描述**：<现象 + 原因 + 1–2 个具体例子；白话，不看代码也能懂>
+  **问题描述**：<...>
   现状：`...`（当前 CSV 行 / 当前函数行为）
   改为：`...`（完整替换行 / 精确 pattern / 函数行为）
   依据：<判定>；样本=`<原始 text，截断 80 字符>`
@@ -123,7 +122,7 @@
 
 ### 3.5 漏项检查
 
-- 每个 P0 类别：兜底后以其为任一端的差异行 ≥ 90% 落在「已判定流向」内，并在清单中至少出现一次（含「不改」）。
+- 每个 P0 类别在清单中至少出现一次（含「不改」）。
 - 判定范围内无差异行的 P0 类别，在清单中记「无差异行」。
 
 ### 3.6 清单结构
@@ -140,6 +139,5 @@
 ## 约束
 
 - 明细是千万行级 CSV，优先 DuckDB / polars 流式聚合；环境没有时用纯 Python `csv` 流式聚合，禁止 pandas 全量读入。
-- 规则优先改 `resources/*.csv`；落到代码 / 配置的标 `高危`。
-- 可在本仓库用 Python `re.search` / 字符串匹配验证 pattern 是否命中样本；不执行 `AUS_BS_CAT_Model` 代码。
+- 规则优先改 `resources/*.csv`；配置 / 引擎顺序改动标 `高危`。
 - 所有计数从当前输入重新计算，不沿用历史文档中的数字。
