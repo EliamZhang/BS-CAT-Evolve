@@ -12,24 +12,21 @@
 ## 怎么读
 
 - **§一 可执行改动**：可以直接改代码/规则。每条先看“问题描述”和例子，再看 `现状` / `改为` / `验证`。
-- **§二 需引擎状态**：规则改不了，要先查账户、合同或产品类型，才能决定怎么改。
-- **§三 未覆盖**：本轮没判定或没展开的长尾，不是“已确认没问题”。
-- **§四 判定结果**：bscat 对、都对、信息不足、先重跑，以及混合流向的拆分结论。
 
 ## P0 覆盖表
 
-| P0 Category            | 范围内行数 | 已判定覆盖行 | 覆盖率 | 清单位置                                   |
-| ---------------------- | ---------: | -----------: | -----: | ------------------------------------------ |
-| Wages                  |    592,127 |      560,727 | 94.70% | §一-10、§一-12~13、§二-1、§四 |
-| Centrelink             |     13,199 |       12,318 | 93.33% | §一-11、§四                              |
-| All Other Credits      |    602,622 |      563,235 | 93.46% | §一-14、§3.3、§3.4、§3.5、§四         |
-| SACC Loans             |    172,451 |      156,625 | 90.82% | §一-4                                    |
-| Non SACC Loans         |    382,801 |      353,513 | 92.35% | §一-4、§一-9、§一-10、§3.4、§四      |
-| Unknown Loans          |    281,862 |      269,942 | 95.77% | §一-4                                    |
-| Credit Card Repayments |     71,389 |       64,877 | 90.88% | §一-3、§一-5~8、§四             |
-| Debt Collection        |     67,333 |       61,054 | 90.67% | §一-1、§一-2、§四                       |
-| Debt Consolidation     |      8,344 |        7,763 | 93.04% | §一-1、§一-2、§四                       |
-| Overdrawn              |     46,666 |       46,634 | 99.93% | §一-1、§一-2、§一-15、§四              |
+| P0 Category            | 范围内行数 | 已判定覆盖行 | 覆盖率 |
+| ---------------------- | ---------: | -----------: | -----: |
+| Wages                  |    592,127 |      560,727 | 94.70% |
+| Centrelink             |     13,199 |       12,318 | 93.33% |
+| All Other Credits      |    602,622 |      563,235 | 93.46% |
+| SACC Loans             |    172,451 |      156,625 | 90.82% |
+| Non SACC Loans         |    382,801 |      353,513 | 92.35% |
+| Unknown Loans          |    281,862 |      269,942 | 95.77% |
+| Credit Card Repayments |     71,389 |       64,877 | 90.88% |
+| Debt Collection        |     67,333 |       61,054 | 90.67% |
+| Debt Consolidation     |      8,344 |        7,763 | 93.04% |
+| Overdrawn              |     46,666 |       46,634 | 99.93% |
 
 ## 一、可执行改动
 
@@ -562,155 +559,3 @@
   影响：1,814 app / 13,376 笔（Dining Out→Gyms）中的 NXT 两个 cluster（258 + 135 = 393 笔）；其余只靠裸 `CLUB` 的场馆会从 Gyms 变为空。
   前置：无。
   验证：`grep -n "club_membership\|nxt_club_dining\|nxt_csi_club_dining" catch_all_engine/resources/catch_all_rules.csv` 确认裸 `CLUB` 行已删、两行新增；重放两条样本 bscat=`Dining Out`；重跑后 `Dining Out → Gyms` 下降；`Gyms and other memberships` 总笔数不异常下降。
-
-## 二、需引擎状态
-
-以下项目不改规则；先取状态，再决定是否进 §一。
-
-| 编号 | 需状态 | 涉及 flow / 行数 | 样本 | 下一步数据 |
-|---|---|---|---|---|
-| 二-1 | `Wages → (空)` 的雇主/工资付款识别 | 8,434 笔；其中 `TRANSFER FROM ...` 3,356 笔、其余公司名/个人付款 3,602 笔 | `TRANSFER FROM LAUNCH RECRUITME LAUNCH RECRUI 2235`（illion=Wages，bscat=空）、`RANDSTAD PTY LTD PAY906173678`（illion=Wages，bscat=空）、`ACTIONWORKFORCE ACTION WORKFORCE 0546027449`（illion=Wages，bscat=空） | 取同一 application 的 payer 历史：`same_payer_credit_count`、付款间隔、金额稳定性、payer key；先离线回放 `same_payer_credit_count >= 2` + 金额 >=100 + 公司后缀/招聘/工资词的组合，确认不误伤 `TRANSFER FROM CASSI CASSI`、`CAMILO PARRA HERRERA ... ARRIENDO` 等个人/房租转账和 `All Other Credits → Wages`，再决定是否进 §一。 |
-| 二-2 | `External Transfers → Transport` 的 Didi 入账方向 | 707 app / 8,042 笔；其中 Didi credit 951 笔 | `Fast Transfer From DIDIMOBILITYAUSTRALIA, Paid by didi X00`（71.81，illion=External Transfers，bscat=Transport）、`Direct Credit 523487 DIDI MOBILITY (A, Paid by didi`（31.67） | 取同一 application 的 Didi 入账历史：`same_payer_credit_count`、金额稳定性、是否有对应 `DIDI PARTNER PAYMENT`；若为司机收入，进 §一 income 规则；否则保留 Transport。 |
-| 二-3 | `Automotive → Groceries` 的 7-Eleven 油/便利店 | 2,646 app / 14,099 笔；其中 7-Eleven cluster 322 笔 | `POS (Cr) purchase386670_7-ELEVEN 4174`（81.69，illion=Automotive，bscat=Groceries） | 取商户号/燃油标识/金额分布；文本无法区分油品和便利店，先按 `7 ELEVEN` 商户号或金额阈值回放，再决定是否把该行改 Automotive。 |
-| 二-4 | `Dining Out ↔ Travel` 的酒店/住宿边界 | Dining Out→Travel 1,602 app / 11,325 笔；Travel→Dining Out 948 app / 5,403 笔 | `Maroochy Bridge Hotel`（12.50，illion=Dining Out，bscat=Travel）、`Park Avenue Hotel Rockhampton`（11.36，illion=Travel，bscat=Dining Out） | 取商户类型/MCC、入住天数、金额；pub meal vs accommodation 文本无法区分，先按 top cluster 回放金额和 MCC，再决定类别。 |
-
-## 三、未覆盖
-
-### 3.1 未判定流向
-
-575 条流向 / 307,180 行未做六向判定。本轮 Top 26（原 Top 30 中 4 条 P0 已判定；上一轮 Top 26 已判定，见 §3.5）：
-
-| 流向                                    |  笔数 |
-| --------------------------------------- | ----: |
-| Non SACC Loans → All Other Credits      | 4,988 |
-| Groceries → Health                      | 4,932 |
-| External Transfers → Entertainment      | 4,741 |
-| Internal Transfer → Retail              | 4,529 |
-| Dining Out → Health                     | 4,521 |
-| Rent → External Transfers               | 4,441 |
-| Transport → Retail                      | 4,249 |
-| Health → All Other Credits              | 4,090 |
-| Dishonours → Gyms and other memberships | 3,996 |
-| Debt Collection → Dishonours            | 3,725 |
-| Internal Transfer → Non SACC Loans      | 3,643 |
-| Wages → External Transfers              | 3,574 |
-| Department Stores → Retail              | 3,539 |
-| Dining Out → Entertainment              | 3,528 |
-| Dining Out → Unknown Loans              | 3,523 |
-| Groceries → Personal Care               | 3,416 |
-| Dining Out → Automotive                 | 3,343 |
-| Entertainment → Retail                  | 3,333 |
-| External Transfers → Personal Care      | 3,317 |
-| Automotive → Retail                     | 3,307 |
-| Dining Out → All Other Credits          | 3,248 |
-| Dining Out → Transport                  | 3,201 |
-| Dishonours → Insurance                  | 3,188 |
-| Retail → Information                    | 3,130 |
-| Automotive → Pet Care                   | 3,000 |
-| Internal Transfer → Groceries           | 2,866 |
-
-原 Top 30 中涉及 P0 的四条流向已判定，见 §3.4；上一轮 Top 26 已逐条判定，见 §3.5。
-
-### 3.2 已判定但本轮未展开的非 P0 漏识别
-
-这些不是未覆盖流向；已判定为 `illion对`（bscat 漏识别），但本轮只展开 P0，未写规则：
-
-| 流向               |    笔数 | Top cluster                                                                    | 下一轮动作                                                                      |
-| ------------------ | ------: | ------------------------------------------------------------------------------ | ------------------------------------------------------------------------------- |
-| Dining Out → (空) | 209,977 | `UberDirectAU_PASS` 1,938 + 1,701 笔                                         | 加 `UBERDIRECTAU` / `UBER EATS` → Dining Out；再按 top 10 cluster 补商户词 |
-| Groceries → (空)  | 105,818 | `CENTRAL COAST VENDIN` 1,032、`HARRIS FARM MARKETS` 560、`FOODWORKS` 416 | 加 vending / Harris Farm / Foodworks 等 Groceries 关键词                        |
-| Retail → (空)     |  70,923 | `PLAYSTATION LONDON` 3,533、`AMAZON MARKETPLACE` 2,689                     | 加 PlayStation / Amazon Marketplace → Retail                                   |
-| Health → (空)     |  24,812 | `CHEMISTWAREHOUSE ONLIN`                                                     | §一-21 已覆盖 Chemist Warehouse；其余按 top cluster 补                |
-
-覆盖内长尾：4,287,327 行 / 838,039 clusters / 73 条 flow 未做 cluster 判定。
-
-### 3.3 P0 已判定但剩余长尾
-
-- `All Other Credits → (空)`：8,977 app / 135,964 笔；§一-14 覆盖 `Interest` / `Adjustment` / `Refund from` 三个 top cluster；其余长尾本轮未展开。
-
-### 3.4 四条 P0 流向的 cluster 判定
-
-| 流向 | 笔数 | Top-10 覆盖 | Top-10 结论 | 剩余长尾 |
-|---|---:|---:|---|---:|
-| Transport → Wages | 10,381 | 5,233 / 50.41% | 判定=`bscat对`；Uber/Didi 司机入账（`UBER BV` 1,610、`DIDI MOBILITY` 133、`UBER PAYMENT FOR SERVICES` 66）应判 Wages；`EFTPOS UBER TRIP HELP` 等小额退款/调整 6,543 笔，当前 HEAD 的 50 元下限应将其排除，先重跑确认 | 5,148 |
-| Wages → All Other Credits | 7,359 | 1,036 / 14.08% | 判定=Top-10 `bscat对`，160 笔带 SALARY / WAGES / PAYROLL 的工资类入账 `illion对`，其余长尾 `信息不足`；Top-10 为个人 OSKO / `Payment from` | 6,323 |
-| Wages → (空) | 8,434 | 1,049 / 12.44% | 判定=混合（`bscat对` / `illion对` / `需引擎状态`）；退款/税务 626 笔和个人转账 bscat 对，`TRANSFER FROM` 3,356 笔及公司名/个人付款中的雇主类多为 bscat 漏识别；Mable / WorkPac 见 §一-12/13，其余见 §二-1 | 7,385 |
-| Non SACC Loans → Dishonours | 5,511 | 1,442 / 26.17% | 判定=混合（`bscat对` / `illion对`）；Afterpay / StepPay 退款 1,402 笔（全量 1,408）是 `illion对`，bscat 误判 Dishonours，见 §一-9；MyPayNow `Return ... Direct Debit` 3,951 笔是 `bscat对` | 4,069 |
-
-- `Transport → Wages` 里 `TRANSPORT NSW` 46 笔疑似交通补贴，bscat 可能因重复付款规则误判 Wages；量小，下一轮单独确认。
-- 明细日期 `2026-10-08` 早于当前 HEAD；`Wages → (空)` 里 `amount<100` 的 1,446 笔（含 <50 的 1,056 笔）和 `Transport → Wages` 里 `amount<50` 的 6,622 笔先按当前 HEAD 重跑，不直接按旧结果补规则。
-- 三条 Top-10 覆盖率 <30% 的流向（`Wages → (空)`、`Wages → All Other Credits`、`Non SACC Loans → Dishonours`）剩余长尾未逐 cluster 判定；`Transport → Wages` 的剩余 5,148 笔仍以 Uber 同一模式为主，未单独展开。
-
-### 3.5 上一轮 Top 26 未覆盖流向的 cluster 判定
-
-26 条合计 251,133 行（其中 8 行零金额不参与 cluster）；Top-10 合计 64,273 行 / 25.59%；剩余 186,852 行 / 52,550 clusters 未逐 cluster 判定，已并入 §3.2 覆盖内长尾。
-
-| 流向 | 笔数 | Top-10 覆盖 | 判定 | 主因 / 去向 |
-|---|---:|---:|---|---|
-| Groceries → Retail | 17,565 | 3,222 / 18.34% | `illion对` | 裸地点词（`HELENSVALE QL`、`WERRIBEE VI`）和重复行覆盖超市关键词；§一-28/29/30 |
-| Internal Transfer → Rent | 16,919 | 14,313 / 84.60% | `illion对` | transfer 已配对的 Internal Transfer 被 rent 引擎按 `Rent` 覆盖；§一-22 |
-| Gyms and other memberships → External Transfers | 15,525 | 2,183 / 14.06% | `illion对` | gym/工会扣款被 Direct Debit 泛规则认领；§一-23/24 |
-| Automotive → Groceries | 14,099 | 1,494 / 10.60% | `混合` | 7-Eleven 油/便利店需状态（§二-3）；servo 被标 Groceries（§一-30） |
-| Dining Out → Gyms and other memberships | 13,376 | 1,640 / 12.26% | `illion对` | 乡村/ leagues club 被标 Gyms（§一-30），裸 `CLUB` 兜底成 Gyms（§一-31），地点词又抢匹配（§一-28） |
-| Travel → (空) | 13,056 | 1,393 / 10.67% | `illion对` | `QANTAS081...` / `VIRGIN AU795...` 字母数字粘连，KB 整词边界拒绝；§一-27 |
-| (空) → Health | 12,636 | 1,808 / 14.31% | `混合` | 真实健康消费 bscat 对；ATM/地点词误判 Health（§一-28） |
-| (空) → Pet Care | 12,329 | 1,305 / 10.58% | `混合` | 真实宠物消费 bscat 对；`PAYPAL AUSTRALIANP` / `PURCH W/D` / `ANDROID PAY` 泛词误判（§一-29） |
-| Gambling → External Transfers | 12,056 | 3,641 / 30.20% | `illion对` | 缺 `BLUEBET` / `SWIFTBET` / `MYBET` / `KENOGO` 等品牌；§一-25 |
-| Dining Out → Travel | 11,325 | 3,013 / 26.60% | `混合` | 酒店被标 Travel（§一-29/30）；pub meal vs accommodation 需状态（§二-4） |
-| Dining Out → Retail | 11,307 | 1,537 / 13.59% | `混合` | `HIGH STREET` 裸词 / ALH 场馆被地点词覆盖（§一-28）；WHSmith/Fuller Sport 零售 bscat 对 |
-| Automotive → External Transfers | 10,849 | 1,106 / 10.19% | `混合` | `RAA OF SA` / `VICROADS` 账单被 Direct Debit/BPAY 认领（§一-23/24）；个人 Osko bscat 对 |
-| External Transfers → Transport | 8,042 | 1,728 / 21.49% | `需引擎状态` | Didi 入账是司机收入还是退款；§二-2 |
-| External Transfers → Travel | 7,727 | 5,682 / 73.53% | `illion对` | `Transfer from/to Holiday` / `Cruise` 已应有 `missfix_e9c`，仍错说明被 catch_all 覆盖；`Quick save` 前缀漏规则（§一-26） |
-| Internal Transfer → Dining Out | 7,329 | 1,651 / 22.53% | `illion对` | `The Boost From:` / `NEW ZEALAND` 被 initial 覆盖；§一-22 |
-| Insurance → External Transfers | 7,158 | 4,048 / 56.55% | `illion对` | `NIB` / `AHM` / `RACI` 缩写缺失 + Direct Debit 泛规则；§一-23/24 |
-| Education → External Transfers | 7,082 | 690 / 9.74% | `illion对` | `STELLA MARIS` / `HUBHELLO` / `BAAKA` 缺失 + Direct Debit 泛规则；§一-23/24 |
-| Automotive → Dining Out | 6,905 | 1,381 / 20.00% | `illion对` | 加油站被地点词/酒吧行覆盖；§一-28/30 |
-| External Transfers → Gyms and other memberships | 6,639 | 713 / 10.74% | `混合` | `ST GEORGE` 银行转账被裸词判 Gyms（§一-28）；Anytime Fitness/工会扣款 bscat 对 |
-| Groceries → Pet Care | 6,384 | 2,041 / 31.97% | `illion对` | 地点词 + `PURCH W/D` + `Free Choice` 误判；§一-28/29 |
-| Utilities → External Transfers | 6,150 | 1,655 / 26.91% | `illion对` | 电/水账单被 BPAY/Direct Debit 泛规则认领；§一-23/24 |
-| All Other Credits → Retail | 5,633 | 1,365 / 24.23% | `混合` | 退款 bscat 对；个人 `Shop` 转账被 initial 判 Retail，illion 对 |
-| Travel → Dining Out | 5,403 | 1,268 / 23.47% | `混合` | 酒吧餐饮 bscat 对；住宿被标 Dining Out 需状态（§二-4） |
-| Groceries → Gyms and other memberships | 5,222 | 1,778 / 34.05% | `illion对` | `POINT COOK` / `REDLAND BAY` 裸地点词；§一-28 |
-| External Transfers → Gambling | 5,213 | 2,451 / 47.02% | `bscat对` | 博彩商户 bscat 正确；illion 标 External Transfers |
-| Dining Out → Pet Care | 5,204 | 1,167 / 22.43% | `illion对` | `ALBION PARK` / `PASCOE VALE` 裸地点 + `ANDROID PAY`；§一-28/29 |
-
-## 四、判定为 bscat对 / 都对 / 信息不足
-
-### 4.1 bscat对（illion 缺失或更粗，bscat 更细且正确；不改）
-
-| 流向                                    |    笔数 | 判定理由                                               |
-| --------------------------------------- | ------: | ------------------------------------------------------ |
-| (空) → Dining Out                      | 221,876 | bscat 新增识别；样本为餐饮/外卖，bscat 正确            |
-| (空) → All Other Credits               | 221,718 | bscat 新增识别；其他入账，bscat 正确                   |
-| (空) → Information                     | 206,736 | bscat 新增识别；Google / 订阅类信息支出，bscat 正确    |
-| (空) → Retail                          | 128,799 | bscat 新增识别；PlayStation / Amazon 等，bscat 正确    |
-| (空) → Groceries                       |  73,749 | bscat 新增识别；超市/食品，bscat 正确                  |
-| (空) → Non SACC Loans                  |  64,572 | bscat 新增识别；贷款文本，bscat 正确                   |
-| (空) → External Transfers              |  75,008 | bscat 新增识别；转账，bscat 正确                       |
-| (空) → Wages                           | 148,584 | bscat 新增识别；`FAST PYMT IN` 子集本轮未处理 |
-| (空) → Travel                          |  18,474 | bscat 新增识别；旅行商户，bscat 正确                   |
-| (空) → Credit Card Repayments          |   1,307 | bscat 新增识别；信用卡还款，bscat 正确                 |
-| External Transfers → All Other Credits | 146,082 | ATO refund / rebate 等，bscat 更细                     |
-| Groceries → Automotive                 |  33,600 | 加油/车辆相关消费，bscat 更细                          |
-| Retail → Subscription TV               |  19,255 | Apple / 订阅边界，bscat 可接受                         |
-| External Transfers → Dining Out        |  22,640 | 转账备注为餐饮，bscat 可接受                           |
-| Transport → Wages                      |  10,381 | bscat 对；Uber/Didi 司机入账应判 Wages，illion 用消费类 Transport 标收入；`amount<50` 的 Uber 退款/调整当前 HEAD 的 50 元下限应使其不再判 Wages，先重跑确认 |
-| Wages → (空)（退款/税务子集）          |     626 | bscat 对；OCL Refund / ATO / TROS 不是工资，illion 误判 Wages |
-| External Transfers → Gambling          |   5,213 | bscat 对；博彩商户 bscat 正确，illion 标 External Transfers |
-
-### 4.2 混合流向（部分进 §一，其余不改 / 需状态）
-
-| 流向 | 笔数 | 判定 |
-|---|---:|---|
-| Wages → All Other Credits | 7,359 | Top-10 个人 OSKO / `Payment from` 共 1,036 笔 bscat 对；160 笔带 SALARY / WAGES / PAYROLL 的工资类入账是 illion 对、bscat 漏识别；其余长尾未展开 |
-| Wages → (空) | 8,434 | 退款/税务 626 笔 bscat 对；Mable/WorkPac 200 笔 illion 对（§一-12/13）；`TRANSFER FROM` 3,356 笔及公司名/个人付款中含雇主入账（§二-1），也有个人转账/房租类 bscat 对样本；其余 4,252 笔混合，未逐簇判定 |
-| Non SACC Loans → Dishonours | 5,511 | Afterpay / StepPay 退款 1,408 笔 illion 对（§一-9）；MyPayNow Return 3,951 笔 bscat 对；Fundo 5 笔和其余 147 笔未展开 |
-| Automotive → Groceries | 14,099 | 7-Eleven 油/便利店 322 笔需状态（§二-3）；servo 被标 Groceries 是 illion 对（§一-30）；其余未逐簇 |
-| (空) → Health | 12,636 | 真实健康消费 bscat 对；ATM/地点词误判 Health 是 illion 对（§一-28）；其余未逐簇 |
-| (空) → Pet Care | 12,329 | 真实宠物消费 bscat 对；`PAYPAL AUSTRALIANP` / `PURCH W/D` / `ANDROID PAY` 泛词误判是 illion 对（§一-29）；其余未逐簇 |
-| Dining Out → Travel | 11,325 | 酒店被标 Travel 是 illion 对（§一-29/30）；pub meal vs accommodation 需状态（§二-4）；其余未逐簇 |
-| Dining Out → Retail | 11,307 | `HIGH STREET` 裸词 / ALH 场馆被地点词覆盖是 illion 对（§一-28）；WHSmith/Fuller Sport 零售 bscat 对；其余未逐簇 |
-| Automotive → External Transfers | 10,849 | `RAA OF SA` / `VICROADS` 账单被认领是 illion 对（§一-23/24）；个人 Osko bscat 对；其余未逐簇 |
-| All Other Credits → Retail | 5,633 | 退款 bscat 对；个人 `Shop` 转账被 initial 判 Retail 是 illion 对；其余未逐簇 |
-| Travel → Dining Out | 5,403 | 酒吧餐饮 bscat 对；住宿被标 Dining Out 需状态（§二-4）；其余未逐簇 |
-| External Transfers → Gyms and other memberships | 6,639 | `ST GEORGE` 银行转账 261 笔 illion 对（§一-28）；Anytime Fitness/工会扣款 bscat 对；其余未逐簇 |
