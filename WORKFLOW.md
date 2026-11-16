@@ -47,36 +47,32 @@
 
 每项按已核实的根因选择一个固定问题类型，不按修改文件或表面结果归类：
 
-| 问题类型 | 适用情况 |
-|---|---|
-| 规则缺项 | 缺少对应商户、关键词或交易写法的识别规则，需要补充规则。 |
-| 匹配偏差 | 已有规则的匹配范围过宽、过窄或清洗方式不一致，导致误命中或漏命中。 |
-| 类别错配 | 识别对象正确，但规则表或映射表配置了错误的目标类别。 |
-| 流程冲突 | 规则本身正确，但被执行顺序、入口限制、优先级或后续覆盖阻断。 |
+| 问题类型 | 适用情况                                                               |
+| -------- | ---------------------------------------------------------------------- |
+| 规则缺项 | 缺少对应商户、关键词或交易写法的识别规则，需要补充规则。               |
+| 匹配偏差 | 已有规则的匹配范围过宽、过窄或清洗方式不一致，导致误命中或漏命中。     |
+| 类别错配 | 识别对象正确，但规则表或映射表配置了错误的目标类别。                   |
+| 流程冲突 | 规则本身正确，但被执行顺序、入口限制、优先级或后续覆盖阻断。           |
 | 判定缺陷 | 账户归属、交易流、金额条件等业务判断逻辑错误或缺失，需要修改判断逻辑。 |
 
 每项只选一个主类型；有多个独立根因则拆项，有关联原因则写入问题说明。根因未明确的放入“待补证据”。问题类型与优先级、风险分别记录，错分 / 漏分 / 误报在问题描述中说明。
 
-每项先让运维看懂问题，再提供具体修改依据：
+每项先让运维看懂问题，再提供具体修改依据。标题行写「优先级｜问题类型｜一句话问题」；引用行写「分类变化 · 影响量 · 证据」。
 
 ```md
 ### CHG-001｜高 / 中｜<一句话说明问题>
-- 问题类型：<规则缺项 / 匹配偏差 / 类别错配 / 流程冲突 / 判定缺陷，选一>
-- 状态：待审核
-- 当前分类 → 目标分类：<BSCAT 当前类别或未分类> → <准确类别名或明确不分类；多组逐一列明>
-- 问题与修改理由：<哪里分错、为什么发生、为什么值得改，用白话说明>
-- 影响与优先理由：<去重用户 / 申请数、笔数、统计条件；实测或估计；业务后果>
-- 证据：<交易 ID / 可定位来源、原始 text、判定依据>
-- 修改方案：<文件 + 稳定定位标识；当前值 → 完整新行 / 精确字段值 / 明确函数行为；批量配置用下表>
-- 依赖与风险：<前置条目 ID 或无；必要的缓存 / 索引重建；可能误伤的类别；高风险项的回退办法>
-- 验收：<正例的预期最终分类、反例保持的结果、同批数据下应改善的指标>
-- 人工意见：<人工确认、修改或不采纳的理由>
+> <问题类型> · <当前分类 → 目标分类，多组用 `；` 分隔> · <去重用户 / 申请数 · 笔数> · 证据 <交易 ID / 来源>：`<原始 text>`
+
+- **问题**：<哪里分错 → 规则为什么没拦住 → 业务后果，2–3 句白话>
+- **改法**：<文件 + 稳定定位标识>；`当前值` → `完整新行 / 精确字段值 / 明确函数行为`（批量配置见下表）
+- **风险 / 验收**：<依赖 / 回退 / 可能误伤的类别；正例的预期分类、反例保持的结果、同批数据应改善的指标>
+- **审核**：`待审核` → 确认 / 暂缓 / 不采纳；<理由>
 ```
 
-批量配置在对应条目的“修改方案”下逐行列明，操作固定为 `新增 / 修改 / 删除`：
+批量配置在对应条目的“改法”下逐行列明，操作固定为 `新增 / 修改 / 删除`：
 
-| 文件 / 稳定定位标识 | 操作 | 当前值 | 修改后值 / 保留内容 | 证据引用 |
-|---|---|---|---|---|
+| 文件 / 稳定定位标识                                 | 操作   | 当前值               | 修改后值 / 保留内容                    | 证据引用                    |
+| --------------------------------------------------- | ------ | -------------------- | -------------------------------------- | --------------------------- |
 | <路径 + merchant_name / rule_name + 必要的区分字段> | <操作> | <完整原值；新增写无> | <完整新行或精确字段值；删除写明保留项> | <该行对应样本 / 可复现行为> |
 
 不得用“收紧、复核、视情况调整”等代替修改方案，也不得用省略号或非引擎支持的通配符代替完整词条；样本必须真实、可定位，不能编造或以截断文本作为执行依据。历史清单只作排查线索，结论与影响量须按当前版本和数据重新核实，不设建议条数目标。
@@ -91,18 +87,18 @@ AI 不得自行确认。清单交由人工决定并安排后续修改，本工�
 
 路径相对于模型仓库，仅作定位入口，以确认版本的实际调用链为准。
 
-| 类别 | 规则 / 配置入口 | 继续追踪 |
-|---|---|---|
-| Wages / Centrelink | `income_engine/resources/income_pattern_rules.csv`、`income_config.csv` | `income_engine/domain/classification.py` |
-| All Other Credits | `all_other_credit_engine/resources/all_other_credit_rules.csv` | `all_other_credit_engine/engine.py` |
-| SACC / Non SACC / Unknown Loans | `liability_engine/resources/counterparty_keyword_rules.csv` | `liability_engine/domain/streams.py`：`SPECIAL_COUNTERPARTY_STREAM_RULES`、`apply_special_counterparty_stream_overrides`、`add_bscat` |
-| Credit Card Repayments | `liability_engine/resources/credit_card_rules.csv` | `liability_engine/domain/counterparty.py`：`apply_credit_card_rules` |
-| Debt Collection / Debt Consolidation | `liability_engine/resources/debt_collection_rules.csv`、`liability_engine/resources/debt_consolidation_rules.csv` | `liability_engine/domain/counterparty.py`：`_apply_flag_rules` → `liability_engine/domain/streams.py`：`add_bscat` |
-| Overdrawn | `liability_engine/resources/overdrawn_rules.csv`、`fee_engine/resources/fee_classification_rules.csv` | `liability_engine/domain/counterparty.py` → `add_bscat`；`fee_engine/domain/classification.py` |
-| Rent | `rent_engine/resources/rent_rules.csv` | `rent_engine/engine.py`、`classification_core/orchestrator.py` |
-| Gambling | `gambling_engine/resources/gambling_rules.csv` | `gambling_engine/engine.py` |
-| Internal Transfer / External Transfers | `transfer_engine/resources/transfer_*.csv` | `transfer_engine/domain/classification.py`、`classification_core/service.py` |
-| Dishonours | `dishonour_engine/resources/dishonour_rules.csv` | `dishonour_engine/engine.py` |
-| Fees | `fee_engine/resources/fee_classification_rules.csv` | `fee_engine/domain/classification.py` |
-| 其余消费类 | `initial_engine/merchant_kb.csv`、`catch_all_engine/resources/catch_all_rules.csv` | `initial_engine/domain/classification.py`、`catch_all_engine/engine.py` |
-| 引擎顺序 / 覆盖关系 | `configs/pipeline.json` | `classification_core/orchestrator.py` |
+| 类别                                   | 规则 / 配置入口                                                                                                       | 继续追踪                                                                                                                                      |
+| -------------------------------------- | --------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------- |
+| Wages / Centrelink                     | `income_engine/resources/income_pattern_rules.csv`、`income_config.csv`                                           | `income_engine/domain/classification.py`                                                                                                    |
+| All Other Credits                      | `all_other_credit_engine/resources/all_other_credit_rules.csv`                                                      | `all_other_credit_engine/engine.py`                                                                                                         |
+| SACC / Non SACC / Unknown Loans        | `liability_engine/resources/counterparty_keyword_rules.csv`                                                         | `liability_engine/domain/streams.py`：`SPECIAL_COUNTERPARTY_STREAM_RULES`、`apply_special_counterparty_stream_overrides`、`add_bscat` |
+| Credit Card Repayments                 | `liability_engine/resources/credit_card_rules.csv`                                                                  | `liability_engine/domain/counterparty.py`：`apply_credit_card_rules`                                                                      |
+| Debt Collection / Debt Consolidation   | `liability_engine/resources/debt_collection_rules.csv`、`liability_engine/resources/debt_consolidation_rules.csv` | `liability_engine/domain/counterparty.py`：`_apply_flag_rules` → `liability_engine/domain/streams.py`：`add_bscat`                   |
+| Overdrawn                              | `liability_engine/resources/overdrawn_rules.csv`、`fee_engine/resources/fee_classification_rules.csv`             | `liability_engine/domain/counterparty.py` → `add_bscat`；`fee_engine/domain/classification.py`                                         |
+| Rent                                   | `rent_engine/resources/rent_rules.csv`                                                                              | `rent_engine/engine.py`、`classification_core/orchestrator.py`                                                                            |
+| Gambling                               | `gambling_engine/resources/gambling_rules.csv`                                                                      | `gambling_engine/engine.py`                                                                                                                 |
+| Internal Transfer / External Transfers | `transfer_engine/resources/transfer_*.csv`                                                                          | `transfer_engine/domain/classification.py`、`classification_core/service.py`                                                              |
+| Dishonours                             | `dishonour_engine/resources/dishonour_rules.csv`                                                                    | `dishonour_engine/engine.py`                                                                                                                |
+| Fees                                   | `fee_engine/resources/fee_classification_rules.csv`                                                                 | `fee_engine/domain/classification.py`                                                                                                       |
+| 其余消费类                             | `initial_engine/merchant_kb.csv`、`catch_all_engine/resources/catch_all_rules.csv`                                | `initial_engine/domain/classification.py`、`catch_all_engine/engine.py`                                                                   |
+| 引擎顺序 / 覆盖关系                    | `configs/pipeline.json`                                                                                             | `classification_core/orchestrator.py`                                                                                                       |
