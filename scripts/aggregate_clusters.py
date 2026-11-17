@@ -167,9 +167,9 @@ def main(src, scope_json, out_dir):
             break
     covered_set = set(covered)
 
-    p0 = scope_cfg.get("P0", [])
-    p0_coverage, p0_backfilled = {}, []
-    for cat in p0:
+    must_review = scope_cfg.get("must_review") or scope_cfg.get("P0", [])
+    must_review_coverage, must_review_backfilled = {}, []
+    for cat in must_review:
         own = [(name, rows) for name, rows in ranked if cat in flow_ends(name)]
         cat_rows = sum(rows for _, rows in own)
         if not cat_rows:
@@ -182,13 +182,13 @@ def main(src, scope_json, out_dir):
                 covered.append(name)
                 covered_set.add(name)
                 cat_covered += rows
-                p0_backfilled.append(name)
-    # Later P0 backfills can also cover earlier categories. Report the final union.
-    for cat in p0:
+                must_review_backfilled.append(name)
+    # Later backfills can also cover earlier categories. Report the final union.
+    for cat in must_review:
         own = [(name, rows) for name, rows in ranked if cat in flow_ends(name)]
         cat_rows = sum(rows for _, rows in own)
         cat_covered = sum(rows for name, rows in own if name in covered_set)
-        p0_coverage[cat] = {
+        must_review_coverage[cat] = {
             "rows": cat_rows, "covered_rows": cat_covered,
             "ratio": cat_covered / cat_rows if cat_rows else None,
         }
@@ -282,8 +282,8 @@ def main(src, scope_json, out_dir):
         "tail_clusters_in_covered_flows": tail_clusters,
         "long_tail_flows": long_tail,
         "covered_flow_names": covered,
-        "p0_coverage": p0_coverage,
-        "p0_backfilled_flows": p0_backfilled,
+        "must_review_coverage": must_review_coverage,
+        "must_review_backfilled_flows": must_review_backfilled,
     }
     json.dump(stats, open(f"{out_dir}/run_stats.json", "w", encoding="utf-8"),
               ensure_ascii=False, indent=2)
@@ -292,9 +292,9 @@ def main(src, scope_json, out_dir):
     for info in flow_info[:30]:
         print(f"{info['rows']:>9} clusters={info['clusters']:>6} "
               f"top10={info['top10_ratio']:.2f} {'C' if info['covered'] else '-'} {info['flow']}")
-    print("\nP0 coverage:")
-    for cat in p0:
-        c = p0_coverage[cat]
+    print("\nmust-review coverage:")
+    for cat in must_review:
+        c = must_review_coverage[cat]
         ratio = f"{c['ratio']:.1%}" if c['ratio'] is not None else "N/A (no difference rows)"
         print(f"  {cat:<24} {c['covered_rows']:>9,}/{c['rows']:>9,} {ratio}")
 

@@ -1,11 +1,12 @@
 import json
 import sys
 
-P0 = [
+MONITOR_P0 = [
     "Wages", "Centrelink", "All Other Credits", "SACC Loans", "Non SACC Loans",
     "Unknown Loans", "Credit Card Repayments", "Debt Collection",
     "Debt Consolidation", "Overdrawn",
 ]
+MUST_REVIEW = MONITOR_P0 + ["Dishonours", "Gambling", "Rent"]
 
 
 def load_data(path):
@@ -26,18 +27,18 @@ def pick(cats, key, reverse=False):
 def main(src, out):
     data = load_data(src)
     cats = data["categories"]
-    p0_present = {c["name"] for c in cats if c.get("level") == "P0"}
-    missing = [n for n in P0 if n not in p0_present]
-    extra = sorted(p0_present - set(P0))
+    monitor_p0 = {c["name"] for c in cats if c.get("level") == "P0"}
+    missing = [n for n in MONITOR_P0 if n not in monitor_p0]
+    extra = sorted(monitor_p0 - set(MONITOR_P0))
     if missing or extra:
-        print(f"WARN P0 mismatch missing={missing} extra={extra}")
+        print(f"WARN monitor P0 mismatch missing={missing} extra={extra}")
 
-    non_p0 = [c for c in cats if c.get("level") != "P0"]
+    non_p0 = [c for c in cats if c.get("name") not in MUST_REVIEW]
     g1 = pick(non_p0, "coverage_gap", reverse=False)
     g2 = pick(non_p0, "diff_count", reverse=True)
     g3 = pick(non_p0, "iou_rate", reverse=False)
     selected = []
-    for name in P0 + g1 + g2 + g3:
+    for name in MUST_REVIEW + g1 + g2 + g3:
         if name not in selected:
             selected.append(name)
 
@@ -45,7 +46,8 @@ def main(src, out):
         "monitor": src.split("/")[-1].split("\\")[-1],
         "dataDate": data.get("dataDate"),
         "generatedAt": data.get("generatedAt"),
-        "P0": P0,
+        "P0": MONITOR_P0,
+        "must_review": MUST_REVIEW,
         "non_p0_groups": {
             "coverage_gap_lowest": g1,
             "diff_count_highest": g2,
