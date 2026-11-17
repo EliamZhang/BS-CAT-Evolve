@@ -158,7 +158,7 @@ def main(src, scope_json, out_dir):
     flows, clusters = p1["flows"], p1["clusters"]
 
     scope_rows = sum(flows.values())
-    ranked = flows.most_common()
+    ranked = sorted(flows.items(), key=lambda kv: (-kv[1], kv[0]))
     covered, acc = [], 0
     for name, rows in ranked:
         covered.append(name)
@@ -219,7 +219,7 @@ def main(src, scope_json, out_dir):
         flow_info.append(info)
         if name in covered_set:
             keys = [k for k in clusters if k[0] == name]
-            keys.sort(key=lambda k: -clusters[k][0])
+            keys.sort(key=lambda k: (-clusters[k][0], k[3], k[2], k[1]))
             top_keys.extend(keys[:10])
 
     apps = stream_pass2(src, set(top_keys), sample_date)

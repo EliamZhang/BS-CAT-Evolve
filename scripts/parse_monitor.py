@@ -18,6 +18,7 @@ def load_data(path):
 
 def pick(cats, key, reverse=False):
     items = [c for c in cats if c.get(key) is not None]
+    items.sort(key=lambda c: c["name"])
     items.sort(key=lambda c: c[key], reverse=reverse)
     return [c["name"] for c in items[:5]]
 
