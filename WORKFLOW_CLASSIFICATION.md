@@ -26,42 +26,53 @@
 - **日期与版本**：默认取 monitor 的 `dataDate`；明细按 `sample_datetime` 取同日，`transaction_date` 只作交易日期。记录模型仓库、分支 / 版本和未提交改动；定位和当前值以工作区为准，有未提交改动时在清单注明。已排除项从模型仓库 `CHANGELOG.md`（没有就跳过）中 `dataDate` 前后 7 天的条目和 `git log -n 20 --oneline` 里找，逐条在当前工作区确认修复已生效；确认不了的写“还没查清的问题”，不直接排除。
 - **关联与去重**：差异方向为 `illion → BSCAT`。交易按同日的 `application_id + job_id + bank_account_id + transaction_id` 关联；摘要另加 `log_id + stream_id`。用户按 `user_id`、申请按 `application_id` 去重；键不唯一或缺失时记录冲突和未关联量，不凭 `stream_id` 或申请号硬拼。
 - **计数**：先核对明细行数与 summary 的差异总数，再排除空、零、非数值金额；对不上先查日期、导出缺失或重复。同笔交易在明细和 evolve 中只算一次。
-- **读取**：CSV 用 `csv` 流式或分块读取，只为候选建索引；旧 `output/` 只作历史线索，所有数字从当前输入重算，不复用旧统计。
+- **读取**：优先读 `_tmp/<分析日期>/` 下脚本生成的候选文件，不重复扫描全量明细；`app_evolve_context.csv` 按申请过滤后只读相关行。旧 `output/` 只作历史线索，所有数字从当前输入重算，不复用旧统计。
 
 ### 2. 多轮筛查
 
-**通用约定**：全文按笔数排序一律从高到低，笔数并列按流向名 → 标准化文本升序（类别或条目按类别名升序）；聚类一律按笔数取 Top10；同一文本模式取样取 `transaction_id` 最小的一条；无差异的类别写“不适用”。
+**通用约定**：全文按笔数排序一律从高到低，笔数并列按流向名 → 标准化文本升序（类别或条目按类别名升序）；聚类一律按笔数取 Top10（第 3 轮长尾 Top100 除外）；同一文本模式取样取 `(transaction_date, transaction_id)` 最小的一条；无差异的类别写“不适用”。
 
 **范围**：以下 13 个必看类别全部纳入；其余类别从 monitor 的 `DATA.categories[]` 中分别取 `coverage_gap` 最低、`diff_count` 最大、`iou_rate` 最低的前 5 类，已在这 13 类中的跳过，缺失指标跳过；三组结果合并去重。
 
 `Wages、Centrelink、All Other Credits、SACC Loans、Non SACC Loans、Unknown Loans、Credit Card Repayments、Debt Collection、Debt Consolidation、Overdrawn、Dishonours、Gambling、Rent`
 
-先建目录 `mkdir -p _tmp/<分析日期>`，运行 `python scripts/parse_monitor.py <monitor> _tmp/<分析日期>/scope.json`，再运行 `python scripts/aggregate_clusters.py <明细> _tmp/<分析日期>/scope.json _tmp/<分析日期>`；临时目录每次覆盖重建。脚本按 `dataDate` 和有效金额筛选，取任一端在 scope 的交易；流向按笔数累计到 90%，再为每个必看类别补足到 90%。输出 `flow_summary.csv`、`clusters_top.csv`、`run_stats.json`，覆盖率和候选计数以 `run_stats.json` 为准。90% 只是流向覆盖率，不是准确率。
+先建目录 `mkdir -p _tmp/<分析日期>`，运行 `python scripts/parse_monitor.py <monitor> _tmp/<分析日期>/scope.json`，再运行 `python scripts/aggregate_clusters.py <明细> _tmp/<分析日期>/scope.json _tmp/<分析日期> --income <收入摘要> --liability <负债摘要> --evolve <evolve 交易>`；摘要或 evolve 缺失时省略对应参数，临时目录每次覆盖重建。脚本一次扫描生成全部候选：
+
+| 文件 | 内容 |
+| --- | --- |
+| `flow_summary.csv`、`clusters_top.csv` | 第 1 轮：流向入选情况和每个入选流向的 Top10 聚类 |
+| `round2_candidates.csv` | 第 2 轮：未入选流向 Top15 各自的 Top10 聚类；不生成时看 `run_stats.json` 的 `round2` |
+| `blind_spot.csv` | 第 3、4 轮：长尾 Top100 + 高风险词 Top10 + 固定类别 Top10，已合并去重，`命中入口` 标明来源 |
+| `round4_examples.csv` | 第 4 轮：每个固定类别 3 条原文例子 |
+| `app_context.csv`、`app_evolve_context.csv` | 第 5 轮：最多 50 个候选申请及各自 evolve 完整交易（`是否差异` 标记差异行） |
+| `run_stats.json` | 各轮候选数、流向覆盖率和必看类别覆盖率，数字以它为准 |
+
+脚本按 `dataDate` 和有效金额筛选；流向按笔数累计到 90%，再为每个必看类别补足到 90%；固定类别另行补扫 scope 外交易。90% 只是流向覆盖率，不是准确率。
 
 **轮次**：第 1 轮主轮 → 第 2 轮补漏轮 → 第 3 轮长尾轮 → 第 4 轮专项轮 → 第 5 轮申请轮。每轮结束把“看了多少笔、新增几个根因、过了几个门槛”写入 `_tmp/<分析日期>/round_coverage.json`（每轮一行：`round`、`rows_reviewed`、`new_root_causes`、`issues_over_threshold`、`status`、`note`；`status` 取 `done / retired`）。
 
 **第 1 轮：主轮**
-- 入口：`flow_summary.csv` 中 `是否入选 = Y` 的流向；每个入选流向取 Top10 聚类。
-- 聚类按方向及归一化 `(counterparty, text)` 分组；原始文本才是证据，不能用代表样本推断整簇。
+- 入口：`clusters_top.csv`；聚类按方向及归一化 `(counterparty, text)` 分组。
+- 原始文本才是证据，不能用代表样本推断整簇。
 
 **第 2 轮：补漏轮**
-- 入口：第 1 轮未入选的流向（`flow_summary.csv` 中 `是否入选` 为 `N`）。按笔数取前 15 条，每条取 Top10 聚类；不足 15 条时全看。
-- 主要抓被 90% 门槛切掉的流向；Top15 合计少于 100 笔时只记录流向和笔数，不做聚类，记“未达聚类门槛”。
+- 入口：`round2_candidates.csv`（未入选流向 Top15，每条 Top10 聚类；不足 15 条时全看）。
+- 主要抓被 90% 门槛切掉的流向；`run_stats.json` 中 `round2.threshold_met = false`（合计少于 100 笔）时只记录流向和笔数，记“未达聚类门槛”。
 
 **第 3 轮：长尾轮**
-- 入口：第 1 轮入选流向中、Top10 之外的长尾。
-- 全局按笔数取前 100 个长尾簇；长尾簇沿用 `aggregate_clusters.py` 的标准化规则和聚类键，排除 `clusters_top.csv` 已列出的 Top10 键。再在长尾簇内按高风险词各取 Top10：`CREDIT CARD`、`LOAN`、`DIRECT DEBIT`、`TRANSFER`、`DISHONOUR`、`RENT`、博彩品牌名（`SPORTSBET`、`LADBROKES`、`TATTS`、`POINTSBET`、`BET365`、`BETFAIR`、`TAB`、`CASINO`、`POKER`、`LOTTO`）。高风险词按不区分大小写匹配；`LOAN`、`RENT` 按词首匹配（含 `LOANS`、`RENTS`、`RENTAL`），`TAB` 用整词（避免 `TABLE`），`TRANSFER` 同时匹配 `TFR`，博彩品牌按品牌名包含。
-- 同一簇同时命中多个入口时只算一次；高风险词命中不足 10 簇时按实际数量。输出 `_tmp/<分析日期>/blind_spot.csv`（簇、笔数、app 数、流向、样本、命中入口），按笔数排序。
+- 入口：`blind_spot.csv` 中 `命中入口` 含 `长尾` 或高风险词的簇。
+- 脚本按全局长尾 Top100、再按高风险词各 Top10 生成并去重：`CREDIT CARD`、`LOAN`、`DIRECT DEBIT`、`TRANSFER`、`DISHONOUR`、`RENT`、博彩品牌名（`SPORTSBET`、`LADBROKES`、`TATTS`、`POINTSBET`、`BET365`、`BETFAIR`、`TAB`、`CASINO`、`POKER`、`LOTTO`）。高风险词按不区分大小写匹配；`LOAN`、`RENT` 按词首匹配（含 `LOANS`、`RENTS`、`RENTAL`），`TAB` 用整词（避免 `TABLE`），`TRANSFER` 同时匹配 `TFR`，博彩品牌按品牌名包含。
+- 同一簇多入口只算一次；高风险词命中不足 10 簇时按实际数量。
 
 **第 4 轮：专项轮**
-- 入口：固定高风险类别，不看簇大小。直接在明细中取任一端等于该类别的交易（不受第 1 轮 scope 限制），按流向分组；`flow_summary.csv` 只用于核对入选流向。
+- 入口：`blind_spot.csv` 中 `命中入口` 含类别名的簇；原文例子见 `round4_examples.csv`。
 - 固定类别：`Credit Card Repayments`、`Dishonours`、`Gambling`、`Rent`、`SACC Loans`、`Non SACC Loans`、`Unknown Loans`、`Debt Collection`、`Debt Consolidation`、`Overdrawn`、`External Transfers`、`Internal Transfer`。
-- 每个类别取 Top10 聚类，并抽 3 条原文例子；对 Top10 簇涉及的规则核对命中 / 漏命中，同一规则只查一次。结果并入 `blind_spot.csv`；同一簇已存在时只追加 `命中入口`，不重复计数，`命中入口` 写类别名；合并后按笔数排序。
+- 对簇涉及的规则核对命中 / 漏命中，同一规则只查一次。脚本已按“任一端等于类别”补扫 scope 外交易；同一簇多入口只追加 `命中入口`，不重复计数。
 
 **第 5 轮：申请轮**
-- 入口：按 `application_id` 聚合，取当日差异笔数前 20、差异金额前 10、以及差异申请中有收入摘要但无负债摘要的申请；再并入第 1–4 轮候选涉及的申请，合并去重后按差异笔数排序，最多 50 个申请。
-- 对每个申请看 evolve 完整交易，覆盖差异、双方同类、双方未分类三种情况；优先查转账 / 退款 / 贷款入账被当工资、还款与消费混淆、催收 / 透支漏报、泛词误命中；结合方向、账户归属和前后交易判断。
-- 按根因合并新增问题。输出 `_tmp/<分析日期>/app_context.csv`（申请、差异笔数、差异金额、有无负债摘要、候选根因、样本）。
+- 入口：`app_context.csv`（脚本已按差异笔数前 20、差异金额前 10、收入有 / 负债无、第 1–4 轮候选，合并去重后取最多 50 个）。
+- 逐申请读 `app_evolve_context.csv` 中该申请的交易（`是否差异` 标出差异行），覆盖差异、双方同类、双方未分类三种情况；优先查转账 / 退款 / 贷款入账被当工资、还款与消费混淆、催收 / 透支漏报、泛词误命中；结合方向、账户归属和前后交易判断。
+- 按根因合并新增问题，把根因写入 `app_context.csv` 的 `候选根因` 列。
 
 **跨轮规则**
 - **根因登记**：每个候选先写根因键（`规则文件:rule_name`、`merchant_kb:关键词` 或 `函数名/条件`）；同一根因跨轮合并笔数、申请数、金额，只保留一条。
@@ -137,7 +148,7 @@
 
 每行对应的样本在“怎么验证”里列出。
 
-交付前逐项核对：`blind_spot.csv`、`app_context.csv`、`round_coverage.json` 均已在 `_tmp/<分析日期>/` 生成；`round_coverage.json` 的每轮 `rows_reviewed` 与清单最后一条逐轮一致；所有数字能按本工作流复算；运维不查代码也能看懂问题、影响和要做什么。不得用“收紧、复核、视情况调整”等模糊说法，不得用省略号或非引擎支持的通配符代替完整词条；样本必须真实，不能用截断文本作执行依据。当前值不符或关联证据不足时补查，不猜测。
+交付前逐项核对：`blind_spot.csv`、`round4_examples.csv`、`app_context.csv`、`round_coverage.json`（传入 evolve 时还有 `app_evolve_context.csv`）均已在 `_tmp/<分析日期>/` 生成；`round_coverage.json` 的每轮 `rows_reviewed` 与清单最后一条逐轮一致；所有数字能按本工作流复算；运维不查代码也能看懂问题、影响和要做什么。不得用“收紧、复核、视情况调整”等模糊说法，不得用省略号或非引擎支持的通配符代替完整词条；样本必须真实，不能用截断文本作执行依据。当前值不符或关联证据不足时补查，不猜测。
 
 ## 二、人工审核：确认改什么
 
