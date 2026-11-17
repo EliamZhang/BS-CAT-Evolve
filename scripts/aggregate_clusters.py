@@ -1,8 +1,10 @@
 import csv
 import json
+import math
 import re
 import sys
 from collections import Counter
+from pathlib import Path
 
 _digits = re.compile(r"\d")
 _non_alnum = re.compile(r"[^A-Z0-9#]+")
@@ -33,7 +35,20 @@ def flow_ends(value):
     return set(parts) if parts else set()
 
 
-def stream_pass1(src, scope):
+def amount_status(value):
+    value = value.strip()
+    if not value:
+        return "blank"
+    try:
+        amount = float(value)
+    except ValueError:
+        return "invalid"
+    if not math.isfinite(amount):
+        return "invalid"
+    return "zero" if amount == 0 else "valid"
+
+
+def stream_pass1(src, scope, sample_date):
     with open(src, encoding="utf-8-sig", newline="") as f:
         reader = csv.reader(f)
         header = next(reader)
@@ -41,7 +56,7 @@ def stream_pass1(src, scope):
         need = [
             "差异流向", "amount", "text", "counterparty", "third_party", "dr_cr",
             "illion_Category", "finv_Category", "排查类型", "transaction_date",
-            "transaction_id", "application_id",
+            "transaction_id", "application_id", "sample_datetime",
         ]
         missing = [n for n in need if n not in idx]
         if missing:
@@ -56,21 +71,22 @@ def stream_pass1(src, scope):
             idx["排查类型"], idx["transaction_date"], idx["transaction_id"], idx["application_id"]
         )
 
-        total = zero = no_flow = outside = 0
+        total = other_dates = period_rows = no_flow = outside = 0
+        excluded_amounts = Counter()
+        dates = Counter()
         flows = Counter()
         clusters = {}
         for row in reader:
             total += 1
-            amt = row[i_amt].strip()
-            if not amt:
-                zero += 1
+            date = row[idx["sample_datetime"]].strip()
+            dates[date] += 1
+            if date != sample_date:
+                other_dates += 1
                 continue
-            try:
-                if float(amt) == 0:
-                    zero += 1
-                    continue
-            except ValueError:
-                zero += 1
+            period_rows += 1
+            status = amount_status(row[i_amt])
+            if status != "valid":
+                excluded_amounts[status] += 1
                 continue
             flow = split_flow(row[i_flow])
             if flow is None:
@@ -84,7 +100,7 @@ def stream_pass1(src, scope):
             flows[flow_name] += 1
             cp = norm_cp(row[i_cp])
             tx = norm_text(row[i_text])
-            key = (flow_name, cp, tx)
+            key = (flow_name, row[i_dr].strip().lower(), cp, tx)
             entry = clusters.get(key)
             if entry is None:
                 clusters[key] = [
@@ -100,12 +116,14 @@ def stream_pass1(src, scope):
                         row[i_app],
                     ]
     return {
-        "header": header, "total": total, "zero": zero, "no_flow": no_flow,
+        "header": header, "total": total, "other_dates": other_dates,
+        "period_rows": period_rows, "dates": dates,
+        "excluded_amounts": excluded_amounts, "no_flow": no_flow,
         "outside": outside, "flows": flows, "clusters": clusters,
     }
 
 
-def stream_pass2(src, wanted):
+def stream_pass2(src, wanted, sample_date):
     app_sets = {key: set() for key in wanted}
     with open(src, encoding="utf-8-sig", newline="") as f:
         reader = csv.reader(f)
@@ -114,25 +132,29 @@ def stream_pass2(src, wanted):
         i_flow, i_cp, i_text = idx["差异流向"], idx["counterparty"], idx["text"]
         i_app, i_amt = idx["application_id"], idx["amount"]
         for row in reader:
-            amt = row[i_amt].strip()
-            if not amt:
+            if row[idx["sample_datetime"]].strip() != sample_date:
                 continue
-            try:
-                if float(amt) == 0:
-                    continue
-            except ValueError:
+            if amount_status(row[i_amt]) != "valid":
                 continue
-            key = (row[i_flow], norm_cp(row[i_cp]), norm_text(row[i_text]))
+            key = (row[i_flow], row[idx["dr_cr"]].strip().lower(),
+                   norm_cp(row[i_cp]), norm_text(row[i_text]))
             s = app_sets.get(key)
-            if s is not None:
-                s.add(row[i_app])
+            app = row[i_app].strip()
+            if s is not None and app:
+                s.add(app)
     return {k: len(v) for k, v in app_sets.items()}
 
 
 def main(src, scope_json, out_dir):
     scope_cfg = json.load(open(scope_json, encoding="utf-8"))
+    sample_date = scope_cfg.get("dataDate")
+    if not sample_date:
+        raise SystemExit("scope.json missing dataDate; rebuild it with parse_monitor.py")
     scope = set(scope_cfg["scope"])
-    p1 = stream_pass1(src, scope)
+    p1 = stream_pass1(src, scope, sample_date)
+    if not p1["period_rows"]:
+        raise SystemExit(f"no detail rows for dataDate={sample_date}; available={sorted(p1['dates'])}")
+    Path(out_dir).mkdir(parents=True, exist_ok=True)
     flows, clusters = p1["flows"], p1["clusters"]
 
     scope_rows = sum(flows.values())
@@ -151,7 +173,6 @@ def main(src, scope_json, out_dir):
         own = [(name, rows) for name, rows in ranked if cat in flow_ends(name)]
         cat_rows = sum(rows for _, rows in own)
         if not cat_rows:
-            p0_coverage[cat] = {"rows": 0, "covered_rows": 0, "ratio": 1.0}
             continue
         cat_covered = sum(rows for name, rows in own if name in covered_set)
         for name, rows in own:
@@ -162,15 +183,19 @@ def main(src, scope_json, out_dir):
                 covered_set.add(name)
                 cat_covered += rows
                 p0_backfilled.append(name)
+    # Later P0 backfills can also cover earlier categories. Report the final union.
+    for cat in p0:
+        own = [(name, rows) for name, rows in ranked if cat in flow_ends(name)]
+        cat_rows = sum(rows for _, rows in own)
+        cat_covered = sum(rows for name, rows in own if name in covered_set)
         p0_coverage[cat] = {
-            "rows": cat_rows,
-            "covered_rows": cat_covered,
-            "ratio": cat_covered / cat_rows,
+            "rows": cat_rows, "covered_rows": cat_covered,
+            "ratio": cat_covered / cat_rows if cat_rows else None,
         }
     covered_rows = sum(rows for name, rows in ranked if name in covered_set)
 
     flow_clusters = {}
-    for (flow, _, _), e in clusters.items():
+    for (flow, _, _, _), e in clusters.items():
         flow_clusters.setdefault(flow, []).append(e[0])
     for flow in flow_clusters:
         flow_clusters[flow].sort(reverse=True)
@@ -197,11 +222,11 @@ def main(src, scope_json, out_dir):
             keys.sort(key=lambda k: -clusters[k][0])
             top_keys.extend(keys[:10])
 
-    apps = stream_pass2(src, set(top_keys))
+    apps = stream_pass2(src, set(top_keys), sample_date)
 
     with open(f"{out_dir}/flow_summary.csv", "w", encoding="utf-8-sig", newline="") as f:
         w = csv.writer(f)
-        w.writerow(["差异流向", "笔数", "聚类数", "是否已判定", "Top10笔数", "Top10覆盖率", "长尾"])
+        w.writerow(["差异流向", "笔数", "聚类数", "是否入选", "Top10笔数", "Top10覆盖率", "长尾"])
         for info in flow_info:
             w.writerow([
                 info["flow"], info["rows"], info["clusters"],
@@ -218,7 +243,7 @@ def main(src, scope_json, out_dir):
             "counterparty标准化",
         ])
         for key in top_keys:
-            flow, cp_norm, text_norm = key
+            flow, _, cp_norm, text_norm = key
             e = clusters[key]
             w.writerow([
                 flow, e[0], apps.get(key, 0), e[1], e[2], e[3], e[4], e[5], e[6],
@@ -233,9 +258,16 @@ def main(src, scope_json, out_dir):
     long_tail = [i["flow"] for i in covered_flow_info if i["long_tail"]]
     stats = {
         "detail_file": src.split("/")[-1].split("\\")[-1],
+        "dataDate": sample_date,
+        "scope_file": str(scope_json),
         "scope_categories": len(scope),
         "total_rows": p1["total"],
-        "zero_amount_rows": p1["zero"],
+        "rows_by_date": dict(sorted(p1["dates"].items())),
+        "other_date_rows": p1["other_dates"],
+        "period_rows": p1["period_rows"],
+        "blank_amount_rows": p1["excluded_amounts"]["blank"],
+        "zero_amount_rows": p1["excluded_amounts"]["zero"],
+        "invalid_amount_rows": p1["excluded_amounts"]["invalid"],
         "no_flow_rows": p1["no_flow"],
         "outside_scope_rows": p1["outside"],
         "scope_rows": scope_rows,
@@ -246,6 +278,7 @@ def main(src, scope_json, out_dir):
         "uncovered_flows": len(uncovered_flows),
         "uncovered_rows": uncovered_rows,
         "tail_rows_in_covered_flows": tail_rows,
+        "top_cluster_rows": covered_rows - tail_rows,
         "tail_clusters_in_covered_flows": tail_clusters,
         "long_tail_flows": long_tail,
         "covered_flow_names": covered,
@@ -262,7 +295,8 @@ def main(src, scope_json, out_dir):
     print("\nP0 coverage:")
     for cat in p0:
         c = p0_coverage[cat]
-        print(f"  {cat:<24} {c['covered_rows']:>9,}/{c['rows']:>9,} {c['ratio']:.1%}")
+        ratio = f"{c['ratio']:.1%}" if c['ratio'] is not None else "N/A (no difference rows)"
+        print(f"  {cat:<24} {c['covered_rows']:>9,}/{c['rows']:>9,} {ratio}")
 
 
 if __name__ == "__main__":
