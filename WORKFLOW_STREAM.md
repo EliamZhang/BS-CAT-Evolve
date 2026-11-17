@@ -2,13 +2,13 @@
 
 **目标**：检查 BSCAT 的交易分流是否正确，重点验证借款流、还款流、收入流的归属、拆分、编号及 `risk_*_log_income_summary.csv` / `risk_*_log_liability_summary.csv` 的口径，产出可审核、可执行的 `output/stream_change_list_YYYYMMDD.md`。
 
-**边界**：只审计分流，不优化普通消费分类。只读 `AUS_BS_CAT_Model`，不修改代码、配置、基线，不运行模型批次；需要在模型侧执行的验证由修复执行人按第七节完成。分类问题移交 `WORKFLOW.md`。摘要、交易分类和 illion 均不是独立真值，摘要自洽不等于分流正确。
+**边界**：只审计分流，不优化普通消费分类。只读 `AUS_BS_CAT_Model`，不修改代码、配置、基线，不运行模型批次；需要在模型侧执行的验证由修复执行人按第七节完成。分类问题移交 `WORKFLOW_CLASSIFICATION.md`。摘要、交易分类和 illion 均不是独立真值，摘要自洽不等于分流正确。
 
 **命名**：日期取生成当天的北京时间（Asia/Shanghai）；同日重复生成依次追加 `_02`、`_03`，不覆盖已有清单。
 
 **与分类工作流的分工**
 
-| 事项 | `WORKFLOW.md` | 本工作流 |
+| 事项 | `WORKFLOW_CLASSIFICATION.md` | 本工作流 |
 | --- | --- | --- |
 | 消费分类、规则命中、BSCAT 差异 | 负责 | 仅作上下文 |
 | 收入流 / 负债流归属、并流、拆流、借贷配对、流号 | 仅引用摘要提示 | 负责 |
@@ -256,7 +256,7 @@
 | 规则配置 | `liability_engine/resources/*.csv`、`income_engine/resources/*.csv`、`fee_engine/resources/fee_classification_rules.csv` |
 | 验证工具 | `baseline.py`、`verify_model.py`、`check_wagego_sample.py` |
 
-## 附 B：现有 `WORKFLOW.md` 分流规则评估
+## 附 B：现有 `WORKFLOW_CLASSIFICATION.md` 分流规则评估
 
 | 位置 | 现状 | 问题 | 建议 |
 | --- | --- | --- | --- |
@@ -271,7 +271,7 @@
 
 1. 输入表摘要行：现状“辅助识别业务影响与流判定异常”；改为“摘要只作业务影响证据，分流正确性由 `WORKFLOW_STREAM.md` 核验”；验证：分类流程不再单独判定流对错。
 2. 关联键条目：现状只列键；改为补“摘要为全量、evolve 为圈选、跨输出只查覆盖运行、流号格式需版本匹配”；验证：跨输出统计不再用全量摘要对比圈选交易。
-3. 收入 / 负债核验：现状要求检查摘要；改为“仅在评估业务影响时引用摘要，分流核验转 `WORKFLOW_STREAM.md`”；验证：`WORKFLOW.md` 不再重复阈值和状态规则。
+3. 收入 / 负债核验：现状要求检查摘要；改为“仅在评估业务影响时引用摘要，分流核验转 `WORKFLOW_STREAM.md`”；验证：`WORKFLOW_CLASSIFICATION.md` 不再重复阈值和状态规则。
 4. 问题类型表：现状五类；改为增加一句“分流缺项、分流错配、并流 / 拆流、借贷配对、摘要口径、流程冲突移交分流工作流”；验证：分类清单中不出现流级修复项。
 5. 附录：现状无分流入口；改为增加“分流审计 | `WORKFLOW_STREAM.md` | 流识别、编号、摘要 builder、引擎覆盖”；验证：从分类文档可一跳找到分流入口。
 
