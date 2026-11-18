@@ -51,7 +51,7 @@
 
 **共享缓存**：`python scripts/build_audit_cache.py <明细> _tmp/<分析日期>/scope.json _tmp/<分析日期> --model <模型仓库>`。脚本一次扫描写出 `audit_cache.pkl`（pyarrow 可用时写 `audit_cache.parquet`）和 `audit_cache_stats.json`，包含当日去重后的有效交易、`text_clean` / `text_clean_channel` / `text_norm` 和 HEAD 商户 KB 命中；后续定向扩查、规则模拟和取证只读缓存，不再重扫明细。`audit_cache_stats.json` 的 `period_rows`、`blank_amount_rows`、`zero_amount_rows`、`invalid_amount_rows` 应和 `run_stats.json` 一致，不一致先查两者是否同一 `dataDate` 和同一明细；去重后的 `dedup_rows` 作为影响计数的行数基准。
 
-**轮次**：第 1 轮主轮 → 第 2 轮补漏轮 → 第 3 轮长尾轮 → 第 4 轮专项轮 → 第 5 轮申请轮。每轮结束把“看了多少笔、新增几个根因、过了几个门槛”写入 `_tmp/<分析日期>/round_coverage.json`（每轮一行：`round`、`rows_reviewed`、`new_root_causes`、`issues_over_threshold`、`status`、`note`；`status` 取 `done / retired`）。
+**轮次**：第 1 轮主轮 → 第 2 轮补漏轮 → 第 3 轮长尾轮 → 第 4 轮专项轮 → 第 4b 轮非 P0 商户轮 → 第 5 轮申请轮。4b 是第 4 轮之后的子轮，不重编 1–5 轮编号。每轮结束把“看了多少笔、新增几个根因、过了几个门槛”写入 `_tmp/<分析日期>/round_coverage.json`（每轮一行：`round`、`rows_reviewed`、`new_root_causes`、`issues_over_threshold`、`status`、`note`；`status` 取 `done / retired`）。
 
 **第 1 轮：主轮**
 - 入口：`clusters_top.csv`；聚类按方向及归一化 `(counterparty, text)` 分组。
@@ -71,14 +71,23 @@
 - 固定类别：`Credit Card Repayments`、`Dishonours`、`Gambling`、`Rent`、`SACC Loans`、`Non SACC Loans`、`Unknown Loans`、`Debt Collection`、`Debt Consolidation`、`Overdrawn`、`External Transfers`、`Internal Transfer`。
 - 对簇涉及的规则核对命中 / 漏命中，同一规则只查一次。脚本已按“任一端等于类别”补扫 scope 外交易；同一簇多入口只追加 `命中入口`，不重复计数。
 
+**第 4b 轮：非 P0 商户轮**（`round=4b_non_p0_merchant`）
+- 入口：共享缓存中 `head_kw` 非空、`head_cat` 属于下面 20 个非 P0 商户类目、`finv_Category != illion_Category` 的行；排除 `output/` 现有清单里已列出的 `merchant_kb` 关键词（不论审核状态）。先把排除词写成 `_tmp/<分析日期>/exclude_keywords.json`（JSON 字符串数组，没有就写 `[]`），再运行 `python scripts/scan_merchant_inconsistency.py --cache _tmp/<分析日期>/audit_cache.pkl --out-dir _tmp/<分析日期> --exclude-keywords _tmp/<分析日期>/exclude_keywords.json`；缓存是 parquet 时把 `--cache` 换成 `audit_cache.parquet`。
+- 非 P0 商户类目：`Dining Out、Retail、Groceries、Health、Automotive、Entertainment、Home Improvement、Travel、Information、Personal Care、Transport、Education、Gyms and other memberships、Pet Care、Donations、Utilities、Telecommunications、Department Stores、Insurance、Subscription TV`。
+- 聚合：脚本按“关键词 + 商户 + KB 类目 + BSCAT + illion”和“关键词 + 商户 + KB 类目”两级输出，过门槛沿用 ≥100 笔或 ≥10 个申请或 ≥10 万澳元；候选文件为 `merchant_pairs_top.csv` / `.json`、`merchant_keywords_top.csv` / `.json`、`unmatched_merchant_texts_top.csv` / `.json`、`category_summary.csv` / `.json`、`merchant_stats.json`。
+- 复核：AI 按 `merchant_pairs_top.json` 的 `samples` 逐条看完整原文，按笔数从高到低取 Top 30 个配对组，同一根因合并为一项；先看商户语义，再看最终类目是否仍等于 `head_cat`；illion 只作参照，不当标准答案。判断取值：BSCAT 对 / illion 对 / 都对 / 都错 / 需引擎状态 / 信息不足。裸词、地名、人名、信托前缀优先看；品牌词正常差异不按裸词误命中处理。`unmatched_merchant_texts_top.json` 只复核过门槛的组，申请数少于 10 的列入“还没查清的问题”，不展开。
+- 影响：每个根因的 `总差异` = 该根因下所有 `finv != illion` 且 HEAD 命中非 P0 商户的笔数；`最终仍保留` = 其中 `finv == head_cat` 的笔数，只有这部分能归因到商户 KB；删词或删行前用 `scripts/eval_kb_scenarios.py` 模拟，写明转空比例，转空不等于新的正确类目。
+- 输出：按“建议修改”模板新增 CHG，状态 `待审核`；药房、DoorDash 这类商务口径问题单独列在“注意”，不混入关键词 bug，口径未定时只给选项，不硬改。
+- 停止：连续两个版本新增根因为 0 且没有过门槛的新问题，下一版停用；出现新的过门槛问题，下一版恢复。
+
 **第 5 轮：申请轮**
-- 入口：`app_context.csv`（脚本已按差异笔数前 20、差异金额前 10、收入有 / 负债无、第 1–4 轮候选，合并去重后取最多 50 个）。
+- 入口：`app_context.csv`（脚本已按差异笔数前 20、差异金额前 10、收入有 / 负债无、第 1–4 轮候选，合并去重后取最多 50 个）；第 4b 轮确认的根因涉及账户归属或上下文时，把相关申请追加进 `app_context.csv` 一并核。
 - 逐申请读 `app_evolve_context.csv` 中该申请的交易（`是否差异` 标出差异行），覆盖差异、双方同类、双方未分类三种情况；优先查转账 / 退款 / 贷款入账被当工资、还款与消费混淆、催收 / 透支漏报、泛词误命中；结合方向、账户归属和前后交易判断。
 - 按根因合并新增问题，把根因写入 `app_context.csv` 的 `候选根因` 列。
 
 **跨轮规则**
 - **根因登记**：每个候选先写根因键（`规则文件:rule_name`、`merchant_kb:关键词` 或 `函数名/条件`）；同一根因跨轮合并笔数、申请数、金额，只保留一条。
-- **轮次停止**：第 1–5 轮默认全跑；某轮连续两个版本新增根因为 0 且没有过门槛的新问题，下一版停用该轮，并在清单里写“第 N 轮停用，原因”。连续计数读取上一版 `_tmp/<上一版日期>/round_coverage.json`；找不到就从 0 开始。单次运行不因某一轮为空提前停止；停用后该入口出现新的过门槛问题，下一版恢复该轮。
+- **轮次停止**：第 1–5 轮（含 4b）默认全跑；某轮连续两个版本新增根因为 0 且没有过门槛的新问题，下一版停用该轮，并在清单里写“第 N 轮停用，原因”。连续计数读取上一版 `_tmp/<上一版日期>/round_coverage.json`；找不到就从 0 开始。单次运行不因某一轮为空提前停止；停用后该入口出现新的过门槛问题，下一版恢复该轮。
 - **核摘要**：每轮候选都要关联同次运行的收入 / 负债摘要，检查类型、周期、状态、金额是否有交易依据；缺上下文或无法核实的列入“还没查清的问题”。
 - **定向扩查**：任一轮确认根因后，围绕泛词、别名缺口、错误映射，反扫当日明细和完整交易里的命中、漏命中变体和反例，按申请数 / 笔数聚合；每个根因只反扫一轮，不跨轮递归；一轮后没有新根因就停止，并写明已查范围和剩余盲区；反扫结果并入该轮根因登记。
 
@@ -98,7 +107,7 @@
 
 ### 4. 输出可审核、可执行的清单
 
-`change_list_YYYYMMDD.md` 固定三部分，运维可直接看懂、AI 可直接执行；第 1–5 轮的结果合并到这一份清单：
+`change_list_YYYYMMDD.md` 固定三部分，运维可直接看懂、AI 可直接执行；第 1–5 轮（含 4b）的结果合并到这一份清单：
 
 1. **这次查了什么**：固定 5 项 + 1 张表，正文不超过 20 行（不含空行，含表格）；只写数据、模型、范围、口径、已排除项，不展开分析过程、聚类样本和已修复项明细。占比 = 检查笔数 ÷ 当天全部差异行数。必看类别表固定 13 行、只保留“类别 / 差异交易数”两列，类别名加中文解释；按 `dataDate`、金额有效、流向任一端等于该类别计数，同一行可同时计入两端。
 
@@ -106,7 +115,7 @@
 ## 一、这次查了什么
 - 数据：<明细文件>，交易日期 <dataDate>；分析日期 <当天>。
 - 模型：<路径>，<分支>，版本 <HEAD>；只读，没有改代码。
-- 范围：13 个必看类别 + <N> 个补充类别；主轮按流向覆盖 90%，另做补漏、长尾、专项和申请轮。共检查 <N> 笔差异交易（当天 <N> 笔的 <N>%）；其余 <N> 笔金额为零或未被任何轮覆盖。
+- 范围：13 个必看类别 + <N> 个补充类别；主轮按流向覆盖 90%，另做补漏、长尾、专项、非 P0 商户和申请轮。共检查 <N> 笔差异交易（当天 <N> 笔的 <N>%）；其余 <N> 笔金额为零或未被任何轮覆盖。
 - 方法/口径：“差异”指 BSCAT 和 illion 分类不一致的交易（illion 是对比用的外部分类结果）；按交易文本分组检查，主要模式覆盖 <N>%。上方范围与必看类别表是差异明细行数；建议修改里的影响数量按 <去重键> 去重，是可能受影响的数量，不是已确认的错误数。
 - 已排除：本轮新发现但模型仓库已经修好、当前版本已生效的问题（<提交号> 等），没有重复列。
 
@@ -115,8 +124,8 @@
 | <类别（中文解释）> | <N> |
 ```
 
-2. **建议修改**：开头用一张汇总表列出编号、一句话问题、影响和优先级，让运维先知道要改什么；下面每项按固定模板展开，编号按“排序与门槛”的顺序连续编。跨文件修改列在同项，依赖用条目 ID 表达。同类配置问题合并处理，不同根因不因改同一文件而合并。没有需要修改的问题时如实说明。第 2–5 轮新确认的问题按同一模板追加，编号顺延。
-3. **还没查清的问题**：按可能影响笔数从大到小，最多 10 条；整体盲区固定放最后一条。每条固定“问题（附 2–3 个原文例子）/ 为什么 / 缺什么 / 建议的修改方案”四段，不能只写“需要更多信息”；修改方案写到具体文件、规则或数据，1–3 步能直接执行，配置类贴完整行。整体盲区一条写清：1–5 轮各看了多少笔、还剩多少笔（按交易去重，未被任何轮看过）、下一版从哪个入口开始。
+2. **建议修改**：开头用一张汇总表列出编号、一句话问题、影响和优先级，让运维先知道要改什么；下面每项按固定模板展开，编号按“排序与门槛”的顺序连续编。跨文件修改列在同项，依赖用条目 ID 表达。同类配置问题合并处理，不同根因不因改同一文件而合并。没有需要修改的问题时如实说明。第 2–5 轮（含 4b）新确认的问题按同一模板追加，编号顺延。
+3. **还没查清的问题**：按可能影响笔数从大到小，最多 10 条；整体盲区固定放最后一条。每条固定“问题（附 2–3 个原文例子）/ 为什么 / 缺什么 / 建议的修改方案”四段，不能只写“需要更多信息”；修改方案写到具体文件、规则或数据，1–3 步能直接执行，配置类贴完整行。整体盲区一条写清：1–5 轮（含 4b）各看了多少笔、还剩多少笔（按交易去重，未被任何轮看过）、下一版从哪个入口开始。
 
 同一根因合并为一项，多个独立根因拆项；根因未明确的放入“还没查清的问题”。
 
@@ -151,7 +160,7 @@
 
 每行对应的样本在“怎么验证”里列出。
 
-交付前逐项核对：`blind_spot.csv`、`round4_examples.csv`、`app_context.csv`、`round_coverage.json`（传入 evolve 时还有 `app_evolve_context.csv`）均已在 `_tmp/<分析日期>/` 生成；`round_coverage.json` 的每轮 `rows_reviewed` 与清单最后一条逐轮一致；所有数字能按本工作流复算；运维不查代码也能看懂问题、影响和要做什么。不得用“收紧、复核、视情况调整”等模糊说法，不得用省略号或非引擎支持的通配符代替完整词条；样本必须真实，不能用截断文本作执行依据。当前值不符或关联证据不足时补查，不猜测。
+交付前逐项核对：`blind_spot.csv`、`round4_examples.csv`、`app_context.csv`、`round_coverage.json`（传入 evolve 时还有 `app_evolve_context.csv`；跑了 4b 时还有 `merchant_pairs_top.json`、`merchant_keywords_top.json`、`unmatched_merchant_texts_top.json`、`category_summary.json`、`merchant_stats.json`）均已在 `_tmp/<分析日期>/` 生成；`round_coverage.json` 的每轮 `rows_reviewed` 与清单最后一条逐轮一致；所有数字能按本工作流复算；运维不查代码也能看懂问题、影响和要做什么。不得用“收紧、复核、视情况调整”等模糊说法，不得用省略号或非引擎支持的通配符代替完整词条；样本必须真实，不能用截断文本作执行依据。当前值不符或关联证据不足时补查，不猜测。
 
 ## 二、人工审核：确认改什么
 
