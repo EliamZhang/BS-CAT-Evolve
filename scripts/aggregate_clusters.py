@@ -83,91 +83,89 @@ def keyword_hit(keyword, text_norm, cp_norm):
     return bool(pattern.search(text_norm) or pattern.search(cp_norm))
 
 
-def stream_pass1(src, scope, fixed, sample_date):
-    with open(src, encoding="utf-8-sig", newline="") as f:
-        reader = csv.reader(f)
-        header = next(reader)
-        idx = {name: i for i, name in enumerate(header)}
-        need = [
-            "差异流向", "amount", "text", "counterparty", "third_party", "dr_cr",
-            "illion_Category", "finv_Category", "排查类型", "transaction_date",
-            "transaction_id", "application_id", "sample_datetime",
-        ]
-        missing = [n for n in need if n not in idx]
-        if missing:
-            raise SystemExit(f"missing columns: {missing}")
-        i_flow, i_amt, i_text, i_cp = (
-            idx["差异流向"], idx["amount"], idx["text"], idx["counterparty"]
-        )
-        i_tp, i_dr, i_ill, i_finv = (
-            idx["third_party"], idx["dr_cr"], idx["illion_Category"], idx["finv_Category"]
-        )
-        i_type, i_date, i_tx, i_app = (
-            idx["排查类型"], idx["transaction_date"], idx["transaction_id"], idx["application_id"]
-        )
-        tracked = scope | fixed
+def stream_rows(header, rows, scope, fixed, sample_date=None):
+    idx = {name: i for i, name in enumerate(header)}
+    need = [
+        "差异流向", "amount", "text", "counterparty", "third_party", "dr_cr",
+        "illion_Category", "finv_Category", "排查类型", "transaction_date",
+        "transaction_id", "application_id", "sample_datetime",
+    ]
+    missing = [n for n in need if n not in idx]
+    if missing:
+        raise SystemExit(f"missing columns: {missing}")
+    i_flow, i_amt, i_text, i_cp = (
+        idx["差异流向"], idx["amount"], idx["text"], idx["counterparty"]
+    )
+    i_tp, i_dr, i_ill, i_finv = (
+        idx["third_party"], idx["dr_cr"], idx["illion_Category"], idx["finv_Category"]
+    )
+    i_type, i_date, i_tx, i_app = (
+        idx["排查类型"], idx["transaction_date"], idx["transaction_id"], idx["application_id"]
+    )
+    tracked = scope | fixed
 
-        total = other_dates = period_rows = no_flow = outside = 0
-        excluded_amounts = Counter()
-        dates = Counter()
-        flows = Counter()
-        clusters = {}
-        app_stats = {}
-        for row in reader:
-            total += 1
-            date = row[idx["sample_datetime"]].strip()
-            dates[date] += 1
-            if date != sample_date:
-                other_dates += 1
-                continue
-            period_rows += 1
-            status = amount_status(row[i_amt])
-            if status != "valid":
-                excluded_amounts[status] += 1
-                continue
-            flow = split_flow(row[i_flow])
-            if flow is None:
-                no_flow += 1
-                continue
-            left, right = flow
-            app = row[i_app].strip()
-            txid = row[i_tx].strip()
+    total = other_dates = period_rows = no_flow = outside = 0
+    excluded_amounts = Counter()
+    dates = Counter()
+    flows = Counter()
+    clusters = {}
+    app_stats = {}
+    for row in rows:
+        row = ["" if v is None else str(v) for v in row]
+        total += 1
+        date = row[idx["sample_datetime"]].strip()
+        dates[date] += 1
+        if sample_date is not None and date != sample_date:
+            other_dates += 1
+            continue
+        period_rows += 1
+        status = amount_status(row[i_amt])
+        if status != "valid":
+            excluded_amounts[status] += 1
+            continue
+        flow = split_flow(row[i_flow])
+        if flow is None:
+            no_flow += 1
+            continue
+        left, right = flow
+        app = row[i_app].strip()
+        txid = row[i_tx].strip()
+        if app:
+            rec = app_stats.get(app)
+            if rec is None:
+                rec = app_stats[app] = {"tx": {}, "sample": None}
+            tx_key = txid or f"row{total}"
+            if tx_key not in rec["tx"]:
+                rec["tx"][tx_key] = abs(float(row[i_amt]))
+                if rec["sample"] is None or (row[i_date], txid) < rec["sample"][:2]:
+                    rec["sample"] = (row[i_date], txid, row[i_text], row[i_amt])
+        flow_name = row[i_flow]
+        if left in scope or right in scope:
+            flows[flow_name] += 1
+        else:
+            outside += 1
+        if left not in tracked and right not in tracked:
+            continue
+        cp = norm_cp(row[i_cp])
+        tx = norm_text(row[i_text])
+        key = (flow_name, row[i_dr].strip().lower(), cp, tx)
+        entry = clusters.get(key)
+        if entry is None:
+            clusters[key] = [
+                1, row[i_date], row[i_amt], row[i_dr], row[i_text], row[i_tp],
+                row[i_cp], row[i_ill], row[i_finv], row[i_type], row[i_tx],
+                row[i_app], {app} if app else set(),
+            ]
+        else:
+            entry[0] += 1
             if app:
-                rec = app_stats.get(app)
-                if rec is None:
-                    rec = app_stats[app] = {"tx": {}, "sample": None}
-                tx_key = txid or f"row{total}"
-                if tx_key not in rec["tx"]:
-                    rec["tx"][tx_key] = abs(float(row[i_amt]))
-                    if rec["sample"] is None or (row[i_date], txid) < rec["sample"][:2]:
-                        rec["sample"] = (row[i_date], txid, row[i_text], row[i_amt])
-            flow_name = row[i_flow]
-            if left in scope or right in scope:
-                flows[flow_name] += 1
-            else:
-                outside += 1
-            if left not in tracked and right not in tracked:
-                continue
-            cp = norm_cp(row[i_cp])
-            tx = norm_text(row[i_text])
-            key = (flow_name, row[i_dr].strip().lower(), cp, tx)
-            entry = clusters.get(key)
-            if entry is None:
-                clusters[key] = [
-                    1, row[i_date], row[i_amt], row[i_dr], row[i_text], row[i_tp],
+                entry[12].add(app)
+            if (row[i_date], txid) < (entry[1], entry[10].strip()):
+                entry[1:12] = [
+                    row[i_date], row[i_amt], row[i_dr], row[i_text], row[i_tp],
                     row[i_cp], row[i_ill], row[i_finv], row[i_type], row[i_tx],
-                    row[i_app], {app} if app else set(),
+                    row[i_app],
                 ]
-            else:
-                entry[0] += 1
-                if app:
-                    entry[12].add(app)
-                if (row[i_date], txid) < (entry[1], entry[10].strip()):
-                    entry[1:12] = [
-                        row[i_date], row[i_amt], row[i_dr], row[i_text], row[i_tp],
-                        row[i_cp], row[i_ill], row[i_finv], row[i_type], row[i_tx],
-                        row[i_app],
-                    ]
     return {
         "header": header, "total": total, "other_dates": other_dates,
         "period_rows": period_rows, "dates": dates,
@@ -175,6 +173,24 @@ def stream_pass1(src, scope, fixed, sample_date):
         "outside": outside, "flows": flows, "clusters": clusters,
         "app_stats": app_stats,
     }
+
+
+def stream_pass1(src, scope, fixed, sample_date):
+    with open(src, encoding="utf-8-sig", newline="") as f:
+        reader = csv.reader(f)
+        header = next(reader)
+        return stream_rows(header, reader, scope, fixed, sample_date)
+
+
+def load_cache_rows(path):
+    import pandas as pd
+
+    path = Path(path)
+    if path.suffix.lower() == ".parquet":
+        df = pd.read_parquet(path)
+    else:
+        df = pd.read_pickle(path)
+    return list(df.columns), df.itertuples(index=False, name=None)
 
 
 def load_app_set(path):
@@ -198,14 +214,20 @@ def cluster_rank_global(clusters):
     return lambda k: (-clusters[k][0], k[0], k[3], k[2], k[1])
 
 
-def main(src, scope_json, out_dir, income=None, liability=None, evolve=None):
+def main(src, scope_json, out_dir, income=None, liability=None, evolve=None, cache=None):
     scope_cfg = json.load(open(scope_json, encoding="utf-8"))
-    sample_date = scope_cfg.get("dataDate")
-    if not sample_date:
-        raise SystemExit("scope.json missing dataDate; rebuild it with parse_monitor.py")
     scope = set(scope_cfg["scope"])
     fixed = set(FIXED_RISK_CATEGORIES)
-    p1 = stream_pass1(src, scope, fixed, sample_date)
+    if cache:
+        header, rows = load_cache_rows(cache)
+        p1 = stream_rows(header, rows, scope, fixed, sample_date=None)
+        nonempty = [d for d in p1["dates"] if d]
+        sample_date = f"{min(nonempty)}~{max(nonempty)}" if nonempty else ""
+    else:
+        sample_date = str(scope_cfg.get("dataDate", "")).strip()
+        if not sample_date:
+            raise SystemExit("scope.json missing dataDate; rebuild it with parse_monitor.py")
+        p1 = stream_pass1(src, scope, fixed, sample_date)
     if not p1["period_rows"]:
         raise SystemExit(f"no detail rows for dataDate={sample_date}; available={sorted(p1['dates'])}")
     Path(out_dir).mkdir(parents=True, exist_ok=True)
@@ -480,7 +502,8 @@ def main(src, scope_json, out_dir, income=None, liability=None, evolve=None):
     tail_clusters = sum(i["clusters"] - i["top10_clusters"] for i in covered_flow_info)
     long_tail = [i["flow"] for i in covered_flow_info if i["long_tail"]]
     stats = {
-        "detail_file": src.split("/")[-1].split("\\")[-1],
+        "detail_file": "" if cache else src.split("/")[-1].split("\\")[-1],
+        "cache_file": str(cache) if cache else "",
         "dataDate": sample_date,
         "scope_file": str(scope_json),
         "scope_categories": len(scope),
@@ -555,6 +578,9 @@ if __name__ == "__main__":
     parser.add_argument("--income")
     parser.add_argument("--liability")
     parser.add_argument("--evolve")
+    parser.add_argument("--cache", action="store_true",
+                        help="treat src as an audit cache built with build_audit_cache.py --all-dates")
     args = parser.parse_args()
     main(args.src, args.scope_json, args.out_dir,
-         income=args.income, liability=args.liability, evolve=args.evolve)
+         income=args.income, liability=args.liability, evolve=args.evolve,
+         cache=args.src if args.cache else None)

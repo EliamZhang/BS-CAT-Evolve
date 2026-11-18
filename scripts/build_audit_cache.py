@@ -1,9 +1,11 @@
 # -*- coding: utf-8 -*-
-"""Build the shared daily audit cache used by classification rounds.
+"""Build the shared audit cache used by classification rounds.
 
 One streaming pass over the diff detail writes the deduped valid rows with
 cleaned text and HEAD initial-engine merchant-KB matches, so later rounds and
-rule simulations do not rescan the full 3.3M-row detail.
+rule simulations do not rescan the full 3.3M-row detail. With --all-dates the
+cache covers every sample_datetime date and keeps the latest snapshot per
+(application_id, transaction_id).
 """
 import argparse
 import ast
@@ -166,7 +168,7 @@ def read_header(path: Path) -> list[str]:
         return next(csv.reader(fh))
 
 
-def load_detail(detail: Path, data_date: str, chunksize: int):
+def load_detail(detail: Path, data_date: str | None, chunksize: int):
     header = read_header(detail)
     missing = [c for c in REQUIRED_COLUMNS if c not in header]
     if missing:
@@ -176,6 +178,8 @@ def load_detail(detail: Path, data_date: str, chunksize: int):
     frames = []
     total_rows = period_rows = valid_rows = 0
     blank = zero = invalid = 0
+    rows_by_date: dict[str, int] = {}
+    blank_date_rows = 0
 
     reader = pd.read_csv(
         detail,
@@ -188,8 +192,15 @@ def load_detail(detail: Path, data_date: str, chunksize: int):
     )
     for chunk in reader:
         total_rows += len(chunk)
-        chunk = chunk[chunk["sample_datetime"] == data_date]
-        period_rows += len(chunk)
+        if data_date is not None:
+            chunk = chunk[chunk["sample_datetime"] == data_date]
+            period_rows += len(chunk)
+        else:
+            counts = chunk["sample_datetime"].value_counts().to_dict()
+            for date, n in counts.items():
+                rows_by_date[date] = rows_by_date.get(date, 0) + int(n)
+            period_rows += len(chunk)
+            blank_date_rows += int((chunk["sample_datetime"].str.strip() == "").sum())
         if chunk.empty:
             continue
 
@@ -214,6 +225,8 @@ def load_detail(detail: Path, data_date: str, chunksize: int):
     return df, {
         "total_rows": total_rows,
         "period_rows": period_rows,
+        "blank_date_rows": blank_date_rows,
+        "rows_by_date": dict(sorted(rows_by_date.items())),
         "blank_amount_rows": blank,
         "zero_amount_rows": zero,
         "invalid_amount_rows": invalid,
@@ -253,20 +266,26 @@ def resolve_format(requested: str) -> str:
 
 
 def build_cache(detail: Path, scope_path: Path, out_dir: Path, model: Path | None,
-                chunksize: int, fmt: str) -> dict:
+                chunksize: int, fmt: str, all_dates: bool = False) -> dict:
     scope = json.loads(scope_path.read_text(encoding="utf-8"))
     data_date = str(scope.get("dataDate", "")).strip()
-    if not data_date:
+    if not all_dates and not data_date:
         raise SystemExit(f"dataDate missing in {scope_path}")
     fmt = resolve_format(fmt)
 
-    df, counts = load_detail(detail, data_date, chunksize)
+    df, counts = load_detail(detail, None if all_dates else data_date, chunksize)
 
     before_dedup = len(df)
     if before_dedup:
-        df = df.drop_duplicates(
-            subset=["application_id", "transaction_id"], keep="first"
-        ).reset_index(drop=True)
+        if all_dates:
+            df = df.sort_values("sample_datetime", kind="stable")
+            df = df.drop_duplicates(
+                subset=["application_id", "transaction_id"], keep="last"
+            ).reset_index(drop=True)
+        else:
+            df = df.drop_duplicates(
+                subset=["application_id", "transaction_id"], keep="first"
+            ).reset_index(drop=True)
     duplicates_removed = before_dedup - len(df)
 
     missing_key_rows = 0
@@ -325,16 +344,22 @@ def build_cache(detail: Path, scope_path: Path, out_dir: Path, model: Path | Non
     df["head_merchant"] = head_merchant if head_merchant else ""
 
     out_dir.mkdir(parents=True, exist_ok=True)
-    cache_path = out_dir / ("audit_cache.parquet" if fmt == "parquet" else "audit_cache.pkl")
+    stem = "audit_cache_all" if all_dates else "audit_cache"
+    cache_path = out_dir / (f"{stem}.parquet" if fmt == "parquet" else f"{stem}.pkl")
     if fmt == "parquet":
         df.to_parquet(cache_path, index=False)
     else:
         df.to_pickle(cache_path)
 
+    if all_dates:
+        dates = [d for d in counts["rows_by_date"] if d]
+        data_date = f"{min(dates)}~{max(dates)}" if dates else ""
+
     head_matched_rows = sum(1 for v in head_kw if v)
     stats = {
         "detail_file": str(detail),
         "dataDate": data_date,
+        "all_dates": all_dates,
         "scope_file": str(scope_path),
         "model_path": str(model) if model is not None else "",
         "model_head": model_head,
@@ -358,10 +383,12 @@ def build_cache(detail: Path, scope_path: Path, out_dir: Path, model: Path | Non
         ),
         "columns": list(df.columns),
     }
-    stats_path = out_dir / "audit_cache_stats.json"
-    stats_path.write_text(
-        json.dumps(stats, ensure_ascii=False, indent=1), encoding="utf-8"
-    )
+    stats_paths = [out_dir / "audit_cache_stats.json"]
+    if all_dates:
+        stats_paths.insert(0, out_dir / "audit_cache_all_stats.json")
+    payload = json.dumps(stats, ensure_ascii=False, indent=1)
+    for stats_path in stats_paths:
+        stats_path.write_text(payload, encoding="utf-8")
     return stats
 
 
@@ -373,16 +400,22 @@ def main() -> None:
     parser.add_argument("--model", type=Path, default=None)
     parser.add_argument("--chunksize", type=int, default=200_000)
     parser.add_argument("--format", choices=["auto", "pickle", "parquet"], default="auto")
+    parser.add_argument("--all-dates", action="store_true",
+                        help="read every sample_datetime date and keep the latest snapshot per transaction")
     args = parser.parse_args()
 
     sys.stdout.reconfigure(encoding="utf-8")
     stats = build_cache(
         args.detail.resolve(), args.scope.resolve(), args.out_dir.resolve(),
         args.model.resolve() if args.model else None, args.chunksize, args.format,
+        all_dates=args.all_dates,
     )
     print(json.dumps({
         "cache_file": stats["cache_file"],
         "cache_format": stats["cache_format"],
+        "dataDate": stats["dataDate"],
+        "all_dates": stats["all_dates"],
+        "rows_by_date": stats["rows_by_date"],
         "period_rows": stats["period_rows"],
         "dedup_rows": stats["dedup_rows"],
         "duplicates_removed": stats["duplicates_removed"],
