@@ -18,28 +18,28 @@
 
 | 文件 | 用途 | 注意 |
 | --- | --- | --- |
-| `bscat_monitor_*.html` | 读取类别指标，确定类别范围和最新 `dataDate` | 类别范围用最新 `dataDate`，不用文件生成时间；日期范围以明细为准；空告警不代表无问题 |
+| `bscat_monitor_*.html` | 读取类别指标，确定类别范围和最新 `dataDate` | 类别范围用最新 `dataDate`，不用文件生成时间；空告警不代表无问题 |
 | `risk_*_dash_detail.csv` | 全部差异交易，用于聚类、计数和取证 | 不含双方同类 / 双方都未分类；`排查类型` 只是差异标签 |
 | `risk_*_evolve_selection.csv` | 圈选的高差异类别和申请 | 不保证覆盖全部必看类别；同一申请可重复入选 |
 | `risk_*_evolve_transactions.csv` | 圈选申请的完整交易上下文 | 只是圈选申请，不能外推总体错分率 |
 | `risk_*_log_income_summary.csv`、`log_liability_summary.csv` | 收入 / 负债摘要，辅助判断业务影响 | 是模型输出，不是真值；缺行、空金额不等于错分 |
 | `risk_*_dash_summary.csv` | 核对差异总量和构成 | 一致率 / 覆盖率不等于准确率 |
-| `risk_*_dash_trend.csv` | 每日差异总量和日期列表 | 用 `all_difference_count` 逐日核对明细行数；日期范围以它和明细为准 |
+| `risk_*_dash_trend.csv` | 每日差异总量和日期列表 | 用 `all_difference_count` 逐日核对明细行数 |
 
-- **日期与版本**：日期范围取明细 `sample_datetime` 的全部非空值，用 `risk_*_dash_trend.csv` 的 `sample_datetime` 和 `all_difference_count` 逐日核对；monitor 的 `dataDate` 只用于选类别范围，不再作为唯一分析日。`transaction_date` 只作交易日期。记录日期列表、每天行数和合计。记录模型仓库、分支 / 版本和未提交改动；定位和当前值以工作区为准，有未提交改动时在清单注明。已排除项从模型仓库 `CHANGELOG.md`（没有就跳过）中日期范围内及前后 7 天的条目和 `git log -n 20 --oneline` 里找，逐条在当前工作区确认修复已生效；确认不了的写“还没查清的问题”，不直接排除。
+- **日期与版本**：日期范围口径见文首「范围」；用 `risk_*_dash_trend.csv` 的 `sample_datetime` 和 `all_difference_count` 逐日核对，记录日期列表、每天行数和合计；`transaction_date` 只作交易日期。记录模型仓库、分支 / 版本和未提交改动；定位和当前值以工作区为准，有未提交改动时在清单注明。已排除项从模型仓库 `CHANGELOG.md`（没有就跳过）中日期范围内及前后 7 天的条目和 `git log -n 20 --oneline` 里找，逐条在当前工作区确认修复已生效；确认不了的写“还没查清的问题”，不直接排除。
 - **关联与去重**：差异方向为 `illion → BSCAT`。先按 `(sample_datetime, application_id, transaction_id)` 做日内去重；跨天汇总再按 `(application_id, transaction_id)` 去重，保留 `sample_datetime` 最大的一行（最新快照）。摘要按同日的 `application_id + job_id + bank_account_id + transaction_id` 关联，另加 `log_id + stream_id`。用户按 `user_id`、申请按 `application_id` 去重；键不唯一或缺失时记录冲突和未关联量，不凭 `stream_id` 或申请号硬拼。
-- **计数**：先按 `dash_trend.csv` 逐日核对明细行数，合计与 `all_difference_count` 总和一致；再排除空、零、非数值金额，按全期 `(application_id, transaction_id)` 去重，得到有效差异行数（等于 `audit_cache_all.pkl` 的 `dedup_rows`）。影响主口径按有效差异行数；明细总行数、重复行数、金额无效数只放过程文件。同笔交易在明细和 evolve 中只算一次。
-- **读取**：优先读 `_tmp/<分析日期>/` 下一次运行生成的全期候选文件和 `audit_cache_all.pkl` / `audit_cache_all_stats.json`（没有就先按下一节建缓存），不重复扫描全量明细；`app_evolve_context.csv` 按申请过滤后只读相关行。旧 `output/` 只作历史线索，所有数字从当前输入重算，不复用旧统计。
+- **计数**：先按 `dash_trend.csv` 逐日核对明细行数，合计与 `all_difference_count` 总和一致；影响主口径为全期有效差异行数（`dedup_rows`，定义见「共享缓存」）；明细总行数、重复行数、金额无效数只放过程文件。同笔交易在明细和 evolve 中只算一次。
+- **读取**：优先读 `_tmp/<分析日期>/` 的全期候选文件和缓存（没有就先按下一节建缓存），不重复扫描全量明细；`app_evolve_context.csv` 按申请过滤后只读相关行。旧 `output/` 只作历史线索，所有数字从当前输入重算，不复用旧统计。
 
 ### 2. 多轮筛查
 
-**通用约定**：全文按笔数排序一律从高到低，笔数并列按流向名 → 标准化文本升序（类别或条目按类别名升序）；聚类一律按笔数取 Top10（第 3 轮长尾 Top100 除外）；同一文本模式取样取 `(transaction_date, transaction_id)` 最小的一条；无差异的类别写“不适用”。
+**通用约定**：全文按笔数排序一律从高到低，笔数并列按流向名 → 标准化文本升序（类别或条目按类别名升序）；聚类一律按笔数取 Top10（第 3 轮长尾 Top100 除外）；同一文本模式取样取 `(transaction_date, transaction_id)` 最小的一条；无差异的类别写“不适用”。各轮的笔数、申请数、金额一律从 `audit_cache_all.pkl` 重算，不把候选 CSV 的计数直接相加；`rows_reviewed` 按全期有效差异行数计。
 
-**范围**：以下 13 个必看类别全部纳入；其余类别从 monitor 最新 `dataDate` 的 `DATA.categories[]` 中分别取 `coverage_gap` 最低、`diff_count` 最大、`iou_rate` 最低的前 5 类，已在这 13 类中的跳过，缺失指标跳过；三组结果合并去重。类别范围只选一次，全部日期共用；日期范围取明细 `sample_datetime` 的全部非空值，优先用 `risk_*_dash_trend.csv` 的 `sample_datetime` 列出，没有 trend 时再扫明细这一列。
+**范围**：以下 13 个必看类别全部纳入；其余类别从 monitor 最新 `dataDate` 的 `DATA.categories[]` 中分别取 `coverage_gap` 最低、`diff_count` 最大、`iou_rate` 最低的前 5 类，已在这 13 类中的跳过，缺失指标跳过；三组结果合并去重。类别范围只选一次，全部日期共用；日期列表优先取 `risk_*_dash_trend.csv` 的 `sample_datetime`，没有 trend 时再扫明细这一列。
 
 `Wages、Centrelink、All Other Credits、SACC Loans、Non SACC Loans、Unknown Loans、Credit Card Repayments、Debt Collection、Debt Consolidation、Overdrawn、Dishonours、Gambling、Rent`
 
-运行 `python scripts/parse_monitor.py <monitor> _tmp/<分析日期>/scope.json` 生成类别范围；再运行 `python scripts/build_audit_cache.py <明细> _tmp/<分析日期>/scope.json _tmp/<分析日期> --model <模型仓库> --format pickle --all-dates` 一次性建全期缓存；然后运行 `python scripts/aggregate_clusters.py _tmp/<分析日期>/audit_cache_all.pkl _tmp/<分析日期>/scope.json _tmp/<分析日期> --cache --income <收入摘要> --liability <负债摘要> --evolve <evolve 交易>`。摘要或 evolve 缺失时省略对应参数，临时目录每次覆盖重建。一次运行生成一套全期候选：
+先运行 `python scripts/parse_monitor.py <monitor> _tmp/<分析日期>/scope.json` 生成类别范围；再按「共享缓存」建全期缓存；然后运行 `python scripts/aggregate_clusters.py _tmp/<分析日期>/audit_cache_all.pkl _tmp/<分析日期>/scope.json _tmp/<分析日期> --cache --income <收入摘要> --liability <负债摘要> --evolve <evolve 交易>`。摘要或 evolve 缺失时省略对应参数，临时目录每次覆盖重建。一次运行生成一套全期候选：
 
 | 文件 | 内容 |
 | --- | --- |
@@ -50,16 +50,16 @@
 | `app_context.csv`、`app_evolve_context.csv` | 第 5 轮：最多 50 个候选申请及各自 evolve 完整交易（`是否差异` 标记差异行） |
 | `run_stats.json` | 全期候选数、流向覆盖率和必看类别覆盖率 |
 
-以上文件都生成在 `_tmp/<分析日期>/`，不按天拆目录。脚本在 `--cache` 模式下读全期去重后的有效交易；流向按笔数累计到 90%，再为每个必看类别补足到 90%；固定类别另行补扫 scope 外交易。90% 只是流向覆盖率，不是准确率。笔数、申请数和金额都从 `audit_cache_all.pkl` 重算，不把候选 CSV 的计数直接相加。
+以上文件都生成在 `_tmp/<分析日期>/`，不按天拆目录。脚本在 `--cache` 模式下读全期去重后的有效交易；流向按笔数累计到 90%，再为每个必看类别补足到 90%；固定类别另行补扫 scope 外交易。90% 只是流向覆盖率，不是准确率。
 
-**共享缓存**：运行 `python scripts/build_audit_cache.py <明细> _tmp/<分析日期>/scope.json _tmp/<分析日期> --model <模型仓库> --format pickle --all-dates`，一次读全量明细，排除空 / 零 / 非数值金额，按 `sample_datetime` 排序后对 `(application_id, transaction_id)` 保留最新快照，写出 `audit_cache_all.pkl` 和 `audit_cache_all_stats.json`（同内容另存 `audit_cache_stats.json`，供 4b 和模拟脚本读取），包含全期去重后的有效交易、`text_clean` / `text_clean_channel` / `text_norm` 和 HEAD 商户 KB 命中。只建一次，不按天拆。后续定向扩查、规则模拟和取证只读 `audit_cache_all.pkl`，不再重扫明细。`period_rows` 必须等于明细总行数和 `dash_trend.csv` 的 `all_difference_count` 合计；`rows_by_date` 是每天明细行数；`dedup_rows` = 全期唯一交易数，作为影响计数的行数基准；`valid_amount_rows - dedup_rows` 是重复行数（日内 + 跨天），`amount_invalid_rows` 是空 / 零 / 非数值金额行数。内存不足时把 `--chunksize` 调小（如 `100000`）。
+**共享缓存**：运行 `python scripts/build_audit_cache.py <明细> _tmp/<分析日期>/scope.json _tmp/<分析日期> --model <模型仓库> --format pickle --all-dates`，一次读全量明细，排除空 / 零 / 非数值金额，按 `sample_datetime` 排序后对 `(application_id, transaction_id)` 保留最新快照，写出 `audit_cache_all.pkl` 和 `audit_cache_all_stats.json`（同内容另存 `audit_cache_stats.json`，供 4b 和模拟脚本读取），包含全期去重后的有效交易、`text_clean` / `text_clean_channel` / `text_norm` 和 HEAD 商户 KB 命中。全期只建一次。后续定向扩查、规则模拟和取证只读 `audit_cache_all.pkl`，不再重扫明细。`period_rows` 必须等于明细总行数和 `dash_trend.csv` 的 `all_difference_count` 合计；`rows_by_date` 是每天明细行数；`dedup_rows` = 全期唯一交易数，作为影响计数的行数基准；`valid_amount_rows - dedup_rows` 是重复行数（日内 + 跨天），`amount_invalid_rows` 是空 / 零 / 非数值金额行数。内存不足时把 `--chunksize` 调小（如 `100000`）。
 
-全期候选统计写在 `run_stats.json`：`--cache` 模式下 `period_rows` 等于 `dedup_rows`（脚本读的是已去重的有效行）；明细总行数、金额无效行数、重复行数和每天行数以 `audit_cache_all_stats.json` 为准。`round2.rows` 是全期候选池笔数；`threshold_met = false`（少于 100 笔）时只记录流向和笔数，记“未达聚类门槛”。
+全期候选统计写在 `run_stats.json`：`--cache` 模式下 `period_rows` 等于 `dedup_rows`（脚本读的是已去重的有效行）；明细总行数、金额无效行数、重复行数和每天行数以 `audit_cache_all_stats.json` 为准。`round2.rows` 是全期候选池笔数。
 
-**轮次**：第 1 轮主轮 → 第 2 轮补漏轮 → 第 3 轮长尾轮 → 第 4 轮专项轮 → 第 4b 轮非 P0 商户轮 → 第 5 轮申请轮。每轮都在同一个全期缓存上生成候选，再按根因合并；笔数、申请数、金额从 `audit_cache_all.pkl` 重算，`rows_reviewed` 按全期去重后的有效差异行数计。4b 是第 4 轮之后的子轮，不重编 1–5 轮编号。每轮结束把“看了多少笔、新增几个根因、过了几个门槛”写入 `_tmp/<分析日期>/round_coverage.json`（每轮一行：`round`、`rows_reviewed`、`by_date`、`new_root_causes`、`issues_over_threshold`、`status`、`note`；`status` 取 `done / retired`）。
+**轮次**：第 1 轮主轮 → 第 2 轮补漏轮 → 第 3 轮长尾轮 → 第 4 轮专项轮 → 第 4b 轮非 P0 商户轮 → 第 5 轮申请轮。每轮都在同一个全期缓存上生成候选，再按根因合并。4b 是第 4 轮之后的子轮，不重编 1–5 轮编号。每轮结束把“看了多少笔、新增几个根因、过了几个门槛”写入 `_tmp/<分析日期>/round_coverage.json`（每轮一行：`round`、`rows_reviewed`、`by_date`、`new_root_causes`、`issues_over_threshold`、`status`、`note`；`status` 取 `done / retired`）。
 
 **第 1 轮：主轮**
-- 入口：`_tmp/<分析日期>/clusters_top.csv`；按 `差异流向 + counterparty标准化 + text标准化` 在整段日期上聚合，笔数和申请数从 `audit_cache_all.pkl` 重算，再按笔数取 Top10。
+- 入口：`_tmp/<分析日期>/clusters_top.csv`；按 `差异流向 + counterparty标准化 + text标准化` 在整段日期上聚合，再按笔数取 Top10。
 - 原始文本才是证据，不能用代表样本推断整簇；每个 Top10 簇的代表样本都要保留在过程文件。
 
 **第 2 轮：补漏轮**
@@ -67,7 +67,7 @@
 - 主要抓被 90% 门槛切掉的流向；`run_stats.json` 的 `round2.threshold_met = false`（`round2.rows` 少于 100 笔）时只记录流向和笔数，记“未达聚类门槛”。`round2.flows` 只含未入选流向 Top15，Top15 之外的流向不纳入第 2 轮，记入整体盲区。
 
 **第 3 轮：长尾轮**
-- 入口：`_tmp/<分析日期>/blind_spot.csv` 中 `命中入口` 含 `长尾` 或高风险词的簇；按 `差异流向 + counterparty标准化 + text标准化` 合并，笔数从 `audit_cache_all.pkl` 重算。
+- 入口：`_tmp/<分析日期>/blind_spot.csv` 中 `命中入口` 含 `长尾` 或高风险词的簇；按 `差异流向 + counterparty标准化 + text标准化` 合并。
 - 全期按长尾 Top100、再按高风险词各 Top10 生成并去重：`CREDIT CARD`、`LOAN`、`DIRECT DEBIT`、`TRANSFER`、`DISHONOUR`、`RENT`、博彩品牌名（`SPORTSBET`、`LADBROKES`、`TATTS`、`POINTSBET`、`BET365`、`BETFAIR`、`TAB`、`CASINO`、`POKER`、`LOTTO`）。高风险词按不区分大小写匹配；`LOAN`、`RENT` 按词首匹配（含 `LOANS`、`RENTS`、`RENTAL`），`TAB` 用整词（避免 `TABLE`），`TRANSFER` 同时匹配 `TFR`，博彩品牌按品牌名包含。
 - 同一簇多入口只算一次；高风险词命中不足 10 簇时按实际数量。
 
@@ -77,13 +77,12 @@
 - 对簇涉及的规则核对命中 / 漏命中，同一规则只查一次；规则检查用全期缓存和完整原文，不按天重复查同一规则。脚本已按“任一端等于类别”补扫 scope 外交易；同一簇多入口只追加 `命中入口`，不重复计数。
 
 **第 4b 轮：非 P0 商户轮**（`round=4b_non_p0_merchant`）
-- 入口：全期缓存中 `head_kw` 非空、`head_cat` 属于下面 20 个非 P0 商户类目、`finv_Category != illion_Category` 的行；排除 `output/` 现有清单里已列出的 `merchant_kb` 关键词（不论审核状态）。先把排除词写成 `_tmp/<分析日期>/exclude_keywords.json`（JSON 字符串数组，没有就写 `[]`），再运行 `python scripts/scan_merchant_inconsistency.py --cache _tmp/<分析日期>/audit_cache_all.pkl --out-dir _tmp/<分析日期> --exclude-keywords _tmp/<分析日期>/exclude_keywords.json`。4b 在全期去重缓存上跑一次，不按天拆；配对组在全期范围内合并，影响按全期去重后的有效交易计。
+- 入口：全期缓存中 `head_kw` 非空、`head_cat` 属于下面 20 个非 P0 商户类目、`finv_Category != illion_Category` 的行；排除 `output/` 现有清单里已列出的 `merchant_kb` 关键词（不论审核状态）。先把排除词写成 `_tmp/<分析日期>/exclude_keywords.json`（JSON 字符串数组，没有就写 `[]`），再运行 `python scripts/scan_merchant_inconsistency.py --cache _tmp/<分析日期>/audit_cache_all.pkl --out-dir _tmp/<分析日期> --exclude-keywords _tmp/<分析日期>/exclude_keywords.json`。4b 在全期去重缓存上跑一次；配对组在全期范围内合并，影响按全期去重后的有效交易计。
 - 非 P0 商户类目：`Dining Out、Retail、Groceries、Health、Automotive、Entertainment、Home Improvement、Travel、Information、Personal Care、Transport、Education、Gyms and other memberships、Pet Care、Donations、Utilities、Telecommunications、Department Stores、Insurance、Subscription TV`。
-- 聚合：脚本按“关键词 + 商户 + KB 类目 + BSCAT + illion”和“关键词 + 商户 + KB 类目”两级输出，过门槛沿用全期去重后的 ≥100 笔或 ≥10 个申请或 ≥10 万澳元；候选文件为 `merchant_pairs_top.csv` / `.json`、`merchant_keywords_top.csv` / `.json`、`unmatched_merchant_texts_top.csv` / `.json`、`category_summary.csv` / `.json`、`merchant_stats.json`。
-- 复核：AI 按 `merchant_pairs_top.json` 的 `samples` 逐条看完整原文，按笔数从高到低取 Top 30 个配对组，同一根因合并为一项；先看商户语义，再看最终类目是否仍等于 `head_cat`；illion 只作参照，不当标准答案。判断取值：BSCAT 对 / illion 对 / 都对 / 都错 / 需引擎状态 / 信息不足。裸词、地名、人名、信托前缀优先看；品牌词正常差异不按裸词误命中处理。`unmatched_merchant_texts_top.json` 只复核过门槛的组，申请数少于 10 的列入“还没查清的问题”，不展开。
-- 影响（全期去重后）：每个根因的 `总差异` = 该根因下所有 `finv != illion` 且 HEAD 命中非 P0 商户的笔数；`最终仍保留` = 其中 `finv == head_cat` 的笔数，只有这部分能归因到商户 KB；删词或删行前用 `scripts/eval_kb_scenarios.py` 模拟，写明转空比例，转空不等于新的正确类目。
+- 聚合：脚本按“关键词 + 商户 + KB 类目 + BSCAT + illion”和“关键词 + 商户 + KB 类目”两级输出，过门槛沿用统一门槛（见第 3 节「排序与门槛」）；候选文件为 `merchant_pairs_top.csv` / `.json`、`merchant_keywords_top.csv` / `.json`、`unmatched_merchant_texts_top.csv` / `.json`、`category_summary.csv` / `.json`、`merchant_stats.json`。
+- 复核：AI 按 `merchant_pairs_top.json` 的 `samples` 逐条看完整原文，按笔数从高到低取 Top 30 个配对组，同一根因合并为一项；先看商户语义，再看最终类目是否仍等于 `head_cat`；illion 只作参照，不当标准答案。判断按第 3 节「判定」的六类取值。裸词、地名、人名、信托前缀优先看；品牌词正常差异不按裸词误命中处理。`unmatched_merchant_texts_top.json` 只复核过门槛的组，申请数少于 10 的列入“还没查清的问题”，不展开。
+- 影响（全期去重后）：每个根因的 `总差异` = 该根因下所有 `finv != illion` 且 HEAD 命中非 P0 商户的笔数；`最终仍保留` = 其中 `finv == head_cat` 的笔数，只有这部分能归因到商户 KB；删词或删行前按第 3 节「批量模拟」评估，写明转空比例，转空不等于新的正确类目。
 - 输出：按“建议修改”模板新增 CHG，状态 `待审核`；药房、DoorDash 这类商务口径问题单独列在“注意”，不混入关键词 bug，口径未定时只给选项，不硬改。
-- 停止：连续两个版本新增根因为 0 且没有过门槛的新问题，下一版停用；出现新的过门槛问题，下一版恢复。
 
 **第 5 轮：申请轮**
 - 入口：先从 `audit_cache_all.pkl` 按 `application_id` 重算全期有效差异笔数和金额，取前 50 个；再合并 `app_context.csv` 补候选和上下文，按 `application_id` 去重。前 50 里不在 `app_context.csv` 的申请，用 `audit_cache_all.pkl` 的差异行补出上下文。第 4b 轮确认的根因涉及账户归属或上下文时，把相关申请追加进 `app_context.csv` 一并核。
@@ -91,7 +90,7 @@
 - 按根因合并新增问题，把根因写入合并后的 `app_context.csv` 的 `候选根因` 列。
 
 **跨轮规则**
-- **根因登记**：每个候选先写根因键（`规则文件:rule_name`、`merchant_kb:关键词` 或 `函数名/条件`）；同一根因跨轮合并，笔数、申请数、金额从 `audit_cache_all.pkl` 重算，只保留一条。
+- **根因登记**：每个候选先写根因键（`规则文件:rule_name`、`merchant_kb:关键词` 或 `函数名/条件`）；同一根因跨轮合并，只保留一条。
 - **轮次停止**：第 1–5 轮（含 4b）默认全跑；某轮连续两个版本新增根因为 0 且没有过门槛的新问题，下一版停用该轮，并在清单里写“第 N 轮停用，原因”。连续计数读取上一版 `_tmp/<上一版日期>/round_coverage.json`；找不到就从 0 开始。单次运行不因某一轮为空提前停止；停用后该入口出现新的过门槛问题，下一版恢复该轮。
 - **核摘要**：每轮候选都要关联同次运行的收入 / 负债摘要，检查类型、周期、状态、金额是否有交易依据；缺上下文或无法核实的列入“还没查清的问题”。
 - **定向扩查**：任一轮确认根因后，围绕泛词、别名缺口、错误映射，反扫全部日期的明细和完整交易里的命中、漏命中变体和反例，按申请数 / 笔数聚合；每个根因只反扫一轮，不跨轮递归；一轮后没有新根因就停止，并写明已查范围和剩余盲区；反扫结果并入该轮根因登记。
@@ -99,7 +98,7 @@
 ### 3. 判定、定位与验证
 
 - **判定**：按类别定义（模型 `CLAUDE.md` / `configs/category_catalog.json`）→ 方向 / 金额 → 完整上下文的顺序判断正确类别，区分“BSCAT 对 / illion 对 / 都对 / 都错 / 需引擎状态 / 信息不足”。账户归属、贷款流证据不足时不凭文本定性；只有错分已证实、方案明确的才进清单。
-- **影响**：笔数 = 全期去重后的有效差异 `(application_id, transaction_id)` 行数（同一笔跨天只算一次，保留最新快照）；申请数 = 全期唯一 `application_id` 数；金额 = 全期去重后的有效差异 `abs(amount)` 合计，保留 2 位小数；注明日期范围（`<start>` 至 `<end>`，共 N 天）。按天计数只放过程文件。候选命中量、样本量和已证实错分量分开写，不把整个流向算成一条规则的收益；多条建议有交集时去重。
+- **影响**：笔数 = 全期去重后的有效差异行数（去重口径见 1.1「关联与去重」）；申请数 = 全期唯一 `application_id` 数；金额 = 全期有效差异 `abs(amount)` 合计，保留 2 位小数；注明日期范围（`<start>` 至 `<end>`，共 N 天）。按天计数只放过程文件。候选命中量、样本量和已证实错分量分开写，不把整个流向算成一条规则的收益；多条建议有交集时去重。
 - **排序与门槛**：影响 13 个必看类别的为高优先级，其余为中优先级；同优先级按影响笔数从高到低。门槛按全期去重后的有效差异计数判断：只有确认错分 ≥100 笔或 ≥10 个申请（或金额 ≥10 万澳元）的才进清单；按天低于门槛但全期过门槛的要进，按天过门槛但全期不过的不进；低于门槛的只汇总。
 
 对候选追到具体规则和最终写入点：
@@ -134,7 +133,7 @@
 
 同一根因合并为一项，多个独立根因拆项；根因未明确的放入“还没查清的问题”。
 
-来源文件和日期在“这次查了什么”统一写一次；每项在“影响”写数量，在“怎么验证”写样本编号，不重复完整原文和计数推导。问题里附 2–3 个原文例子；涉及业务归属不确定时，在“注意”里写清需要谁确认。
+来源文件和日期只在“这次查了什么”写一次；每项在“影响”写数量，在“怎么验证”写样本编号。问题里附 2–3 个原文例子；涉及业务归属不确定时，在“注意”里写清需要谁确认。
 
 ```md
 ### CHG-001｜高｜<一句话问题>
@@ -165,7 +164,7 @@
 
 每行对应的样本在“怎么验证”里列出。
 
-交付前逐项核对：`_tmp/<分析日期>/` 下的 `flow_summary.csv`、`clusters_top.csv`、`round2_candidates.csv`、`blind_spot.csv`、`round4_examples.csv`、`app_context.csv`、`run_stats.json` 均已生成；`audit_cache_all.pkl`、`audit_cache_all_stats.json` / `audit_cache_stats.json`、`round_coverage.json`（传入 evolve 时还有 `app_evolve_context.csv`；跑了 4b 时还有 `merchant_pairs_top.json`、`merchant_keywords_top.json`、`unmatched_merchant_texts_top.json`、`category_summary.json`、`merchant_stats.json`）同在 `_tmp/<分析日期>/`；`round_coverage.json` 的每轮 `rows_reviewed` 与清单最后一条逐轮一致；所有数字能按本工作流复算；运维不查代码也能看懂问题、影响和要做什么。不得用“收紧、复核、视情况调整”等模糊说法，不得用省略号或非引擎支持的通配符代替完整词条；样本必须真实，不能用截断文本作执行依据。当前值不符或关联证据不足时补查，不猜测。
+交付前逐项核对：第 2 节表格里的候选文件、4b 候选 JSON、`audit_cache_all.pkl`、`audit_cache_all_stats.json` / `audit_cache_stats.json`、`round_coverage.json` 均已在 `_tmp/<分析日期>/` 生成（传入 evolve 时含 `app_evolve_context.csv`）；`round_coverage.json` 的每轮 `rows_reviewed` 与清单最后一条逐轮一致；所有数字能按本工作流复算；运维不查代码也能看懂问题、影响和要做什么。不得用“收紧、复核、视情况调整”等模糊说法，不得用省略号或非引擎支持的通配符代替完整词条；样本必须真实，不能用截断文本作执行依据。当前值不符或关联证据不足时补查，不猜测。
 
 ## 二、人工审核：确认改什么
 
