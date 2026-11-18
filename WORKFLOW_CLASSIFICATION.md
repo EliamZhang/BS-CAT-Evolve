@@ -26,7 +26,7 @@
 - **日期与版本**：默认取 monitor 的 `dataDate`；明细按 `sample_datetime` 取同日，`transaction_date` 只作交易日期。记录模型仓库、分支 / 版本和未提交改动；定位和当前值以工作区为准，有未提交改动时在清单注明。已排除项从模型仓库 `CHANGELOG.md`（没有就跳过）中 `dataDate` 前后 7 天的条目和 `git log -n 20 --oneline` 里找，逐条在当前工作区确认修复已生效；确认不了的写“还没查清的问题”，不直接排除。
 - **关联与去重**：差异方向为 `illion → BSCAT`。交易按同日的 `application_id + job_id + bank_account_id + transaction_id` 关联；摘要另加 `log_id + stream_id`。用户按 `user_id`、申请按 `application_id` 去重；键不唯一或缺失时记录冲突和未关联量，不凭 `stream_id` 或申请号硬拼。
 - **计数**：先核对明细行数与 summary 的差异总数，再排除空、零、非数值金额；对不上先查日期、导出缺失或重复。同笔交易在明细和 evolve 中只算一次。
-- **读取**：优先读 `_tmp/<分析日期>/` 下脚本生成的候选文件，不重复扫描全量明细；`app_evolve_context.csv` 按申请过滤后只读相关行。旧 `output/` 只作历史线索，所有数字从当前输入重算，不复用旧统计。
+- **读取**：优先读 `_tmp/<分析日期>/` 下脚本生成的候选文件和 `audit_cache.pkl` / `audit_cache.parquet`（没有就先按下一节建缓存），不重复扫描全量明细；`app_evolve_context.csv` 按申请过滤后只读相关行。旧 `output/` 只作历史线索，所有数字从当前输入重算，不复用旧统计。
 
 ### 2. 多轮筛查
 
@@ -48,6 +48,8 @@
 | `run_stats.json` | 各轮候选数、流向覆盖率和必看类别覆盖率，数字以它为准 |
 
 脚本按 `dataDate` 和有效金额筛选；流向按笔数累计到 90%，再为每个必看类别补足到 90%；固定类别另行补扫 scope 外交易。90% 只是流向覆盖率，不是准确率。
+
+**共享缓存**：`python scripts/build_audit_cache.py <明细> _tmp/<分析日期>/scope.json _tmp/<分析日期> --model <模型仓库>`。脚本一次扫描写出 `audit_cache.pkl`（pyarrow 可用时写 `audit_cache.parquet`）和 `audit_cache_stats.json`，包含当日去重后的有效交易、`text_clean` / `text_clean_channel` / `text_norm` 和 HEAD 商户 KB 命中；后续定向扩查、规则模拟和取证只读缓存，不再重扫明细。`audit_cache_stats.json` 的 `period_rows`、`blank_amount_rows`、`zero_amount_rows`、`invalid_amount_rows` 应和 `run_stats.json` 一致，不一致先查两者是否同一 `dataDate` 和同一明细；去重后的 `dedup_rows` 作为影响计数的行数基准。
 
 **轮次**：第 1 轮主轮 → 第 2 轮补漏轮 → 第 3 轮长尾轮 → 第 4 轮专项轮 → 第 5 轮申请轮。每轮结束把“看了多少笔、新增几个根因、过了几个门槛”写入 `_tmp/<分析日期>/round_coverage.json`（每轮一行：`round`、`rows_reviewed`、`new_root_causes`、`issues_over_threshold`、`status`、`note`；`status` 取 `done / retired`）。
 
@@ -89,6 +91,7 @@
 对候选追到具体规则和最终写入点：
 
 - **查配置**：核对 `merchant_kb.csv`、对应引擎规则和 `catch_all_rules.csv`，检查商户 / 别名 / 缩写 / 截断写法缺失、泛词误命中、类别错配、重复关键词冲突。同类问题在同一条规则文件的同一字段内一次查全；每个改动都要有样本或可复现的错误行为。
+- **批量模拟**：merchant_kb 场景用 `python scripts/eval_kb_scenarios.py --cache <缓存文件> --model <模型仓库> --scenarios <场景.json> --out _tmp/<分析日期>/kb_scenario_impact.json --csv _tmp/<分析日期>/kb_scenario_impact.csv`；`<缓存文件>` 取实际生成的 `audit_cache.pkl` 或 `audit_cache.parquet`。场景 JSON 写 `name`、`target_category`、`scope_keywords`、`remove_keywords`、`add_keywords`，三个词条字段都支持用 `|` 分隔多个词条，`scope_keywords` 可用 `*` 表示全部；脚本一次加载 HEAD 和候选 KB，按唯一 `text_clean_channel` 匹配后回连交易计数。输出是初始引擎模拟，后续引擎覆盖和端到端结果仍按“预验证”复跑。
 - **定位**：记录相对路径、`rule_name` / `merchant_name` / 函数名和当前值，按实际匹配和覆盖顺序追到最终 `bscat` 写入点。规则命中不等于最终生效。
 - **改法**：优先改规则表。新增按实际表头写全；修改 / 删除写精确字段值；逻辑修改写清条件、输入和期望行为。全局配置、引擎顺序、跨类别覆盖标“高风险”，写回退办法。
 - **预验证**：按实际清洗、大小写、方向和匹配语义，用真实正例和易误伤反例验证前后变化；正例覆盖每个新增 / 修改的词条；反例取 1 条同前缀但不该命中的交易。只在本仓库独立匹配，不运行模型代码；无法复现覆盖链时写明限制，不宣称端到端通过。
